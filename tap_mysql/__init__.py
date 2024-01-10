@@ -391,7 +391,6 @@ def log_server_params(mysql_conn):
             with open_conn.cursor() as cur:
                 cur.execute('''
                 SELECT VERSION() as version,
-                       @@session.max_statement_time as max_statement_time,
                        @@session.net_read_timeout as net_read_timeout,
                        @@session.net_write_timeout as net_write_timeout,
                        @@session.wait_timeout as wait_timeout,
@@ -401,7 +400,6 @@ def log_server_params(mysql_conn):
                 row = cur.fetchone()
                 LOGGER.info('Server Parameters: ' +
                             'version: %s, ' +
-                            'max_statement_time: %s, ' +
                             'net_read_timeout: %s, ' +
                             'net_write_timeout: %s, ' +
                             'wait_timeout: %s, ' +
