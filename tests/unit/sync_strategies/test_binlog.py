@@ -1804,6 +1804,7 @@ class TestBinlogSyncStrategy(TestCase):
         ]
 
         mysql_con.__enter__.return_value.cursor.return_value = cur_mock
+        mysql_con.__enter__.return_value.get_server_info.return_value = (8, 0, 44)
 
         connect_with_backoff.return_value = mysql_con
 
@@ -1827,6 +1828,7 @@ class TestBinlogSyncStrategy(TestCase):
         ]
 
         mysql_con.__enter__.return_value.cursor.return_value = cur_mock
+        mysql_con.__enter__.return_value.get_server_info.return_value = (8, 0, 44)
 
         connect_with_backoff.return_value = mysql_con
 
