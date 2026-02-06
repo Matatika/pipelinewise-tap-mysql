@@ -97,8 +97,14 @@ def verify_gtid_config(mysql_conn: MySQLConnection):
 
 def fetch_current_log_file_and_pos(mysql_conn):
     with connect_with_backoff(mysql_conn) as open_conn:
+        open_conn: MySQLConnection
+        server_version = open_conn.get_server_info()
+
         with open_conn.cursor() as cur:
-            cur.execute("SHOW MASTER STATUS")
+            if server_version < "8.4":
+                cur.execute("SHOW MASTER STATUS")
+            else:
+                cur.execute("SHOW BINARY LOG STATUS")
 
             result = cur.fetchone()
 

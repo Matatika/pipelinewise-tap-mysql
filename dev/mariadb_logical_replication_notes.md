@@ -25,7 +25,8 @@
 ```mariadb
 FLUSH TABLES WITH READ LOCK;
 
-show master status ;
+SHOW MASTER STATUS; -- <8.4
+SHOW BINARY LOG STATUS; -- >=8.4
 ```
 
 Save binlog file and pos somewhere. 
