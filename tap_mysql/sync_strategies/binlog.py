@@ -101,7 +101,7 @@ def fetch_current_log_file_and_pos(mysql_conn):
         server_version = open_conn.get_server_info()
 
         with open_conn.cursor() as cur:
-            if server_version < (8, 4):
+            if server_version < "8.4":
                 cur.execute("SHOW MASTER STATUS")
             else:
                 cur.execute("SHOW BINARY LOG STATUS")
