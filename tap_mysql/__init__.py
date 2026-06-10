@@ -202,7 +202,8 @@ def get_binlog_streams(mysql_conn, catalog, config, state):
     return resolve_catalog(discovered, binlog_streams)
 
 
-def do_sync_incremental(mysql_conn, catalog_entry, state, columns):
+def do_sync_incremental(mysql_conn, catalog_entry, state, columns,
+                        fetch_batch_size=common.DEFAULT_FETCH_BATCH_SIZE):
     LOGGER.info("Stream %s is using incremental replication", catalog_entry.stream)
 
     md_map = metadata.to_map(catalog_entry.metadata)
@@ -215,7 +216,8 @@ def do_sync_incremental(mysql_conn, catalog_entry, state, columns):
     write_schema_message(catalog_entry=catalog_entry,
                          bookmark_properties=[replication_key])
 
-    incremental.sync_table(mysql_conn, catalog_entry, state, columns)
+    incremental.sync_table(mysql_conn, catalog_entry, state, columns,
+                           fetch_batch_size=fetch_batch_size)
 
     singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
@@ -316,14 +318,16 @@ def do_sync_historical_binlog(mysql_conn, catalog_entry, state, columns, use_gti
                                               current_gtid)
 
 
-def do_sync_full_table(mysql_conn, catalog_entry, state, columns):
+def do_sync_full_table(mysql_conn, catalog_entry, state, columns,
+                       fetch_batch_size=common.DEFAULT_FETCH_BATCH_SIZE):
     LOGGER.info("Stream %s is using full table replication", catalog_entry.stream)
 
     write_schema_message(catalog_entry)
 
     stream_version = common.get_stream_version(catalog_entry.tap_stream_id, state)
 
-    full_table.sync_table(mysql_conn, catalog_entry, state, columns, stream_version)
+    full_table.sync_table(mysql_conn, catalog_entry, state, columns, stream_version,
+                          fetch_batch_size=fetch_batch_size)
 
     # Prefer initial_full_table_complete going forward
     singer.clear_bookmark(state, catalog_entry.tap_stream_id, 'version')
@@ -336,7 +340,8 @@ def do_sync_full_table(mysql_conn, catalog_entry, state, columns):
     singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
 
-def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, engine):
+def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, engine,
+                            fetch_batch_size=common.DEFAULT_FETCH_BATCH_SIZE):
     for catalog_entry in non_binlog_catalog.streams:
         columns = list(catalog_entry.schema.properties.keys())
 
@@ -362,11 +367,13 @@ def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, eng
             log_engine(mysql_conn, catalog_entry)
 
             if replication_method == 'INCREMENTAL':
-                do_sync_incremental(mysql_conn, catalog_entry, state, columns)
+                do_sync_incremental(mysql_conn, catalog_entry, state, columns,
+                                    fetch_batch_size=fetch_batch_size)
             elif replication_method == 'LOG_BASED':
                 do_sync_historical_binlog(mysql_conn, catalog_entry, state, columns, use_gtid, engine)
             elif replication_method == 'FULL_TABLE':
-                do_sync_full_table(mysql_conn, catalog_entry, state, columns)
+                do_sync_full_table(mysql_conn, catalog_entry, state, columns,
+                                   fetch_batch_size=fetch_batch_size)
             else:
                 raise Exception("only INCREMENTAL, LOG_BASED, and FULL TABLE replication methods are supported")
 
@@ -397,7 +404,8 @@ def do_sync(mysql_conn, config, catalog, state):
                             non_binlog_catalog,
                             state,
                             config['use_gtid'],
-                            config['engine']
+                            config['engine'],
+                            fetch_batch_size=config.get('fetch_batch_size', common.DEFAULT_FETCH_BATCH_SIZE)
                             )
     sync_binlog_streams(mysql_conn, binlog_catalog, config, state)
 

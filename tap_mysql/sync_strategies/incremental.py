@@ -14,7 +14,7 @@ from tap_mysql.sync_strategies import common
 BOOKMARK_KEYS = {'replication_key', 'replication_key_value', 'version'}
 
 
-def sync_table(mysql_conn, catalog_entry, state, columns):
+def sync_table(mysql_conn, catalog_entry, state, columns, fetch_batch_size=common.DEFAULT_FETCH_BATCH_SIZE):
     common.whitelist_bookmark_keys(BOOKMARK_KEYS, catalog_entry.tap_stream_id, state)
 
     catalog_metadata = metadata.to_map(catalog_entry.metadata)
@@ -73,4 +73,5 @@ def sync_table(mysql_conn, catalog_entry, state, columns):
                               select_sql,
                               columns,
                               stream_version,
-                              params)
+                              params,
+                              fetch_batch_size=fetch_batch_size)
