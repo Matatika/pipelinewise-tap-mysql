@@ -37,4 +37,5 @@ setup(name='pipelinewise-tap-mysql',
           tap-mysql=tap_mysql:main
       ''',
       packages=['tap_mysql', 'tap_mysql.sync_strategies'],
+      python_requires=">=3.10"
       )
