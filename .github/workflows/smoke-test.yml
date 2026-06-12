@@ -1,0 +1,67 @@
+name: Smoke Test
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+jobs:
+  smoke-test:
+    name: tap-mysql → target-duckdb
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+        - "3.10"
+        - "3.11"
+        - "3.12"
+        - "3.13"
+        - "3.14"
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: master1
+          MYSQL_DATABASE: tap_mysql_test
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mysqladmin ping -u root -pmaster1 --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Seed database
+        run: mysql -h 127.0.0.1 -P 3307 -u root -pmaster1 tap_mysql_test < dev/init.sql
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Meltano
+        run: uv tool install meltano
+
+      - name: Install Meltano plugins
+        run: meltano install
+
+      - name: Run pipeline
+        run: meltano run tap-mysql target-duckdb
+
+      - name: Verify DuckDB output
+        run: |
+          uv run --with duckdb python - <<'EOF'
+          import duckdb
+
+          conn = duckdb.connect("./output/warehouse.duckdb", read_only=True)
+          count = conn.execute("SELECT COUNT(*) FROM tap_mysql_test.perf_test").fetchone()[0]
+          assert count > 0, f"Expected rows in tap_mysql_test.perf_test, got {count}"
+          print(f"OK: {count} rows in tap_mysql_test.perf_test")
+          EOF

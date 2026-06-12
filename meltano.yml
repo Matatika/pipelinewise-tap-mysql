@@ -1,0 +1,74 @@
+default_environment: dev
+project_id: 019eb291-12fa-7397-b588-3f0914765518
+environments:
+- name: dev
+- name: staging
+- name: prod
+send_anonymous_usage_stats: false
+plugins:
+  extractors:
+  - name: tap-mysql
+    namespace: tap_mysql
+    pip_url: -e .
+    executable: tap-mysql
+    capabilities:
+    - discover
+    - catalog
+    - state
+    settings:
+    - name: host
+      kind: string
+    - name: port
+      kind: integer
+      value: 3306
+    - name: user
+      kind: string
+    - name: password
+      kind: password
+    - name: database
+      kind: string
+    - name: filter_dbs
+      kind: string
+    - name: engine
+      kind: string
+      value: mysql
+    - name: use_gtid
+      kind: boolean
+      value: false
+    - name: cursorclass
+      kind: string
+    - name: server_id
+      kind: string
+    - name: ssl
+      kind: string
+    - name: ssl_ca
+      kind: string
+    - name: ssl_cert
+      kind: string
+    - name: ssl_key
+      kind: string
+    - name: internal_hostname
+      kind: string
+    - name: session_sqls
+      kind: array
+    - name: fetch_batch_size
+      kind: integer
+      value: 10000
+    config:
+      host: localhost
+      port: 3307
+      user: root
+      password: master1
+      database: tap_mysql_test
+    select:
+    - tap_mysql_test-perf_test.*
+    metadata:
+      tap_mysql_test-perf_test:
+        replication-method: FULL_TABLE
+  loaders:
+  - name: target-duckdb
+    variant: meltanolabs
+    pip_url: git+https://github.com/MeltanoLabs/target-duckdb.git
+    config:
+      default_target_schema: tap_mysql_test
+      path: ./output/warehouse.duckdb

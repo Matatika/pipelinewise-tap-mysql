@@ -1,4 +1,5 @@
 # configure replication user
+create user if not exists 'replication_user'@'%' identified by 'secret123passwd';
 grant replication client on *.* to 'replication_user'@'%';
 grant replication slave on *.* to 'replication_user'@'%';
 flush privileges;
@@ -36,3 +37,19 @@ drop table r2;
 
 alter table r1 add column b1 bool default False;
 insert into r1 (c1, b1) values ('#8', True);
+
+create table perf_test (
+    id int auto_increment primary key,
+    val varchar(100),
+    ts datetime default current_timestamp()
+);
+
+insert into perf_test (val)
+select concat('row-', a.n + b.n * 10 + c.n * 100 + d.n * 1000 + e.n * 10000 + f.n * 100000 + 1)
+from (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) a
+cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) b
+cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) c
+cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) d
+cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) e
+cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4) f
+where a.n + b.n * 10 + c.n * 100 + d.n * 1000 + e.n * 10000 + f.n * 100000 < 500000;
