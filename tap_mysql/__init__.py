@@ -1,11 +1,13 @@
 # pylint: disable=missing-docstring,too-many-locals
 import copy
+import sys
 from decimal import Decimal
 
 import orjson
 import pymysql
 import singer
 import singer.messages as _singer_messages
+import singer.utils as _singer_utils
 
 from typing import Dict
 from singer import metadata, get_logger
@@ -29,11 +31,40 @@ def _orjson_default(obj):
     raise TypeError(f'Object of type {type(obj)} is not JSON serializable')
 
 
+_cached_time_extracted_dt = None
+_cached_time_extracted_str = None
+
+
 def _format_message(message):
+    if isinstance(message, _singer_messages.RecordMessage):
+        global _cached_time_extracted_dt, _cached_time_extracted_str
+        d = {'type': 'RECORD', 'stream': message.stream, 'record': message.record}
+        if message.version is not None:
+            d['version'] = message.version
+        if message.time_extracted:
+            if message.time_extracted is not _cached_time_extracted_dt:
+                _cached_time_extracted_dt = message.time_extracted
+                _cached_time_extracted_str = _fast_strftime(message.time_extracted)
+            d['time_extracted'] = _cached_time_extracted_str
+        return orjson.dumps(d, default=_orjson_default).decode()
     return orjson.dumps(message.asdict(), default=_orjson_default).decode()
 
 
+def _write_message(message):
+    sys.stdout.write(_format_message(message) + '\n')
+    if not isinstance(message, _singer_messages.RecordMessage):
+        sys.stdout.flush()
+
+
+def _fast_strftime(dtime, format_str='%04Y-%m-%dT%H:%M:%S.%fZ'):  # noqa: ARG001
+    # isoformat() is implemented in C; replace suffix to match Singer's Z convention
+    return dtime.isoformat(timespec='microseconds').replace('+00:00', 'Z')
+
+
 _singer_messages.format_message = _format_message
+_singer_messages.write_message = _write_message
+_singer_utils.strftime = _fast_strftime  # type: ignore[method-assign]
+singer.write_message = _write_message  # type: ignore[assignment]
 
 REQUIRED_CONFIG_KEYS = [
     'host',
