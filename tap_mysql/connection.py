@@ -3,6 +3,7 @@
 
 import backoff
 import pymysql
+import pymysql.cursors
 import ssl
 import singer
 

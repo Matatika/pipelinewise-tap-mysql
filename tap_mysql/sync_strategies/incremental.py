@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # pylint: disable=missing-function-docstring
 
+import datetime
+
 import pendulum
 import singer
 from singer import metadata
@@ -56,7 +58,7 @@ def sync_table(mysql_conn, catalog_entry, state, columns):
 
             if replication_key_value is not None:
                 if catalog_entry.schema.properties[replication_key_metadata].format == 'date-time':
-                    replication_key_value = pendulum.parse(replication_key_value)
+                    replication_key_value = pendulum.instance(datetime.datetime.fromisoformat(replication_key_value))
 
                 select_sql += f" WHERE `{replication_key_metadata}` >= %(replication_key_value)s " \
                               f"ORDER BY `{replication_key_metadata}` ASC"
