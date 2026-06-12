@@ -1,7 +1,11 @@
 # pylint: disable=missing-docstring,too-many-locals
 import copy
+from decimal import Decimal
+
+import orjson
 import pymysql
 import singer
+import singer.messages as _singer_messages
 
 from typing import Dict
 from singer import metadata, get_logger
@@ -17,6 +21,19 @@ from tap_mysql.sync_strategies import full_table
 from tap_mysql.sync_strategies import incremental
 
 LOGGER = get_logger('tap_mysql')
+
+
+def _orjson_default(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError(f'Object of type {type(obj)} is not JSON serializable')
+
+
+def _format_message(message):
+    return orjson.dumps(message.asdict(), default=_orjson_default).decode()
+
+
+_singer_messages.format_message = _format_message
 
 REQUIRED_CONFIG_KEYS = [
     'host',

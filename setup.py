@@ -24,6 +24,7 @@ setup(name='pipelinewise-tap-mysql',
           'PyMySQL==1.2.*',
           'plpygis==0.6.1',
           'cryptography',
+          'orjson',
           'tzlocal==5.3.1',
       ],
       extras_require={
