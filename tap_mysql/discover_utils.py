@@ -58,21 +58,33 @@ BINARY_TYPES = {'binary', 'varbinary'}
 
 SPATIAL_TYPES = {'geometry', 'point', 'linestring',
                  'polygon', 'multipoint', 'multilinestring',
-                 'multipolygon', 'geometrycollection'}
+                 'multipolygon', 'geometrycollection',
+                 'geomcollection'}  # MySQL 8.0+ alias for geometrycollection
 
 _INTEGER_DISPLAY_WIDTH_RE = re.compile(r'^(tinyint|smallint|mediumint|int|bigint|year)\((\d+)\)(.*)')
 
 
-def _normalize_column_type(column_type: str) -> str:
-    """Strip default display widths from integer/year types for cross-version consistency.
+def _normalize_column_type(col: 'Column') -> str:
+    """Return a normalized sql-datatype string, stripping integer display widths.
 
-    MySQL 8.0.17+ removed display widths for integer types (e.g. bigint(20) -> bigint),
-    but MariaDB still reports them. This normalizes both to the same format.
-    Exception: tinyint(1) unsigned is preserved as-is (non-default, user-meaningful width).
+    MySQL 8.0.17+ removed default display widths (e.g. bigint(20) -> bigint) and also strips
+    the width from TINYINT(1) UNSIGNED -> tinyint unsigned. MariaDB still reports all widths.
+    This normalizes both engines to the same canonical form:
+    - tinyint(1) unsigned is always tinyint(1) unsigned (reconstructed via numeric_precision when needed)
+    - all other integer/year display widths are stripped
     """
+    column_type = col.column_type.lower()
+    data_type = col.data_type.lower()
+
+    # MySQL 8.0+ strips (1) from TINYINT(1) UNSIGNED -> 'tinyint unsigned'.
+    # Reconstruct the canonical form using numeric_precision.
+    if data_type == 'tinyint' and col.numeric_precision == 1 and 'unsigned' in column_type:
+        return 'tinyint(1) unsigned'
+
     m = _INTEGER_DISPLAY_WIDTH_RE.match(column_type)
     if m:
         base_type, width, modifiers = m.group(1), m.group(2), m.group(3).strip()
+        # tinyint(1) unsigned is the canonical boolean+unsigned form — preserve it
         if base_type == 'tinyint' and width == '1' and modifiers == 'unsigned':
             return column_type
         return (base_type + (' ' + modifiers if modifiers else '')).strip()
@@ -271,7 +283,9 @@ def schema_for_column(column):  # pylint: disable=too-many-branches
 
     result = Schema(inclusion=inclusion)
 
-    if data_type in BOOL_TYPES or column_type.startswith('tinyint(1)'):
+    is_tinyint1 = column_type.startswith('tinyint(1)') or \
+        (data_type == 'tinyint' and column.numeric_precision == 1)
+    if data_type in BOOL_TYPES or is_tinyint1:
         result.type = ['null', 'boolean']
 
     elif data_type in BYTES_FOR_INTEGER_TYPE:
@@ -331,7 +345,7 @@ def create_column_metadata(cols: List[Column]):
 
         mdata = metadata.write(mdata,
                                ('properties', col.column_name),
-                               'sql-datatype', _normalize_column_type(col.column_type.lower()))
+                               'sql-datatype', _normalize_column_type(col))
 
 
         mdata = metadata.write(mdata,
