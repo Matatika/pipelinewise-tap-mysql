@@ -102,7 +102,7 @@ jobs:
         run: make integration_test extra_args=--cov-fail-under=85
 
       - name: Shutdown db test container
-        run: docker compose down mariadb_server1
+        run: docker compose down
 
   integration_test_mysql:
     name: Intergation tests with Mysql database
@@ -150,4 +150,4 @@ jobs:
         run: make integration_test extra_args=--cov-fail-under=84
 
       - name: Shutdown db test container
-        run: docker compose down mysql_server
+        run: docker compose down
