@@ -13,8 +13,9 @@ LOGGER = singer.get_logger('tap_mysql')
 
 CONNECT_TIMEOUT_SECONDS = 30
 
-# We need to hold onto this for self-signed SSL
-MATCH_HOSTNAME = ssl.match_hostname
+# ssl.match_hostname was removed in Python 3.12; only needed for the Google
+# Cloud internal_hostname SSL monkey-patch on older runtimes.
+MATCH_HOSTNAME = getattr(ssl, 'match_hostname', None)
 MARIADB_ENGINE = 'mariadb'
 MYSQL_ENGINE = 'mysql'
 
@@ -125,10 +126,11 @@ class MySQLConnection(pymysql.connections.Connection):
                 "key": "./key.pem",
             }
 
-            # override match hostname for google cloud
-            if config.get("internal_hostname"):
+            # override match hostname for google cloud (Python < 3.12 only)
+            if config.get("internal_hostname") and MATCH_HOSTNAME is not None:
                 parsed_hostname = parse_internal_hostname(config["internal_hostname"])
-                ssl.match_hostname = lambda cert, hostname: MATCH_HOSTNAME(cert, parsed_hostname)# pylint: disable=W1505
+                _match = MATCH_HOSTNAME
+                setattr(ssl, 'match_hostname', lambda cert, _h: _match(cert, parsed_hostname))
 
         super().__init__(defer_connect=True, ssl=ssl_arg, **args)
 
