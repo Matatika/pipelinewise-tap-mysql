@@ -1,17 +1,16 @@
 venv:
-	python3 -m venv venv ;\
-	. ./venv/bin/activate ;\
-	pip install --upgrade pip setuptools wheel ;\
-	pip install -e .[test]
+	uv venv --clear ;\
+	. ./.venv/bin/activate ;\
+	uv pip install -e .[test]
 
-pylint:
-	. ./venv/bin/activate ;\
-	pylint --rcfile .pylintrc tap_mysql/
+lint:
+	. ./.venv/bin/activate ;\
+	ruff check tap_mysql/
 
 unit_test:
-	. ./venv/bin/activate ;\
-	nosetests -c .noserc --cover-min-percentage=47 tests/unit $(extra_args)
+	. ./.venv/bin/activate ;\
+	pytest tests/unit --cov=tap_mysql --cov-report=html --cov-fail-under=47 $(extra_args)
 
 integration_test:
-	. ./venv/bin/activate ;\
-	nosetests -c .noserc tests/integration $(extra_args)
+	. ./.venv/bin/activate ;\
+	pytest tests/integration --cov=tap_mysql --cov-report=html $(extra_args) -vvv

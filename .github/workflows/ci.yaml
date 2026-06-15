@@ -1,17 +1,27 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   pull_request:
   push:
     branches:
       - master
       - main
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_COLOR: 1
 
 jobs:
   lint_and_test:
     name: Linting and Testing
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version:
         - "3.10"
@@ -23,17 +33,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
       - name: Setup virtual environment
         run: make venv
 
-      - name: Pylinting
-        run: make pylint
+      - name: Lint
+        run: make lint
 
       - name: Unit Tests
         run: make unit_test
@@ -41,20 +58,33 @@ jobs:
 
   integration_test_mariadb:
     name: Intergation tests with MariaDB database
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: [ 3.7, 3.8 ]
+        python-version:
+        - "3.10"
+        - "3.11"
+        - "3.12"
+        - "3.13"
+        - "3.14"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Build db test container
-        run: docker-compose up -d mariadb_server1
+        run: docker compose up -d mariadb_server1 --wait
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -69,14 +99,14 @@ jobs:
           TAP_MYSQL_HOST: localhost
           TAP_MYSQL_ENGINE: mariadb
           LOGGING_CONF_FILE: ./sample_logging.conf
-        run: make integration_test extra_args=--cover-min-percentage=85
+        run: make integration_test extra_args=--cov-fail-under=85
 
       - name: Shutdown db test container
-        run: docker-compose down mariadb_server1
+        run: docker compose down mariadb_server1
 
   integration_test_mysql:
     name: Intergation tests with Mysql database
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -90,12 +120,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Build db test container
-        run: docker-compose up -d mysql_server
+        run: docker compose up -d mysql_server --wait
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -110,7 +147,7 @@ jobs:
           TAP_MYSQL_HOST: localhost
           TAP_MYSQL_ENGINE: mysql
           LOGGING_CONF_FILE: ./sample_logging.conf
-        run: make integration_test extra_args=--cover-min-percentage=84
+        run: make integration_test extra_args=--cov-fail-under=84
 
       - name: Shutdown db test container
-        run: docker-compose down mysql_server
+        run: docker compose down mysql_server

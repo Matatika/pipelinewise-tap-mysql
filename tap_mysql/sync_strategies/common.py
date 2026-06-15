@@ -2,10 +2,10 @@
 # pylint: disable=missing-function-docstring,too-many-arguments,too-many-locals
 import copy
 import datetime
-import singer
 import time
 
-from singer import metadata, utils, metrics
+import singer
+from singer import metadata, metrics, utils
 
 from tap_mysql.stream_utils import get_key_properties
 

@@ -6,19 +6,13 @@ import orjson
 import pymysql
 import singer
 import singer.messages as _singer_messages
-
-from typing import Dict
-from singer import metadata, get_logger
-from singer import metrics
+from singer import get_logger, metadata, metrics
 from singer.catalog import Catalog
 
-from tap_mysql.connection import connect_with_backoff, MySQLConnection, fetch_server_id, MYSQL_ENGINE
+from tap_mysql.connection import MYSQL_ENGINE, MySQLConnection, connect_with_backoff
 from tap_mysql.discover_utils import discover_catalog, resolve_catalog
 from tap_mysql.stream_utils import write_schema_message
-from tap_mysql.sync_strategies import binlog
-from tap_mysql.sync_strategies import common
-from tap_mysql.sync_strategies import full_table
-from tap_mysql.sync_strategies import incremental
+from tap_mysql.sync_strategies import binlog, common, full_table, incremental
 
 LOGGER = get_logger('tap_mysql')
 
