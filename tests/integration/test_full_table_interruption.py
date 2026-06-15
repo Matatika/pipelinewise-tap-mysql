@@ -1,7 +1,6 @@
 import unittest
 
 import singer
-import singer.metadata
 
 import tap_mysql
 from tap_mysql.connection import connect_with_backoff
@@ -84,6 +83,7 @@ def init_tables(conn):
 
 class BinlogInterruption(unittest.TestCase):
     def setUp(self):
+        self._original_write_message = singer.write_message
         self.conn = test_utils.get_test_connection()
         self.catalog = init_tables(self.conn)
 
@@ -109,6 +109,10 @@ class BinlogInterruption(unittest.TestCase):
         TABLE_2_RECORD_COUNT = 0
 
         global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
+
+    def tearDown(self):
+        singer.write_message = self._original_write_message
         SINGER_MESSAGES.clear()
 
     def test_table_2_interrupted(self):
@@ -228,6 +232,7 @@ class BinlogInterruption(unittest.TestCase):
 
 class FullTableInterruption(unittest.TestCase):
     def setUp(self):
+        self._original_write_message = singer.write_message
         self.conn = test_utils.get_test_connection()
         self.catalog = init_tables(self.conn)
 
@@ -249,6 +254,10 @@ class FullTableInterruption(unittest.TestCase):
         TABLE_2_RECORD_COUNT = 0
 
         global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
+
+    def tearDown(self):
+        singer.write_message = self._original_write_message
         SINGER_MESSAGES.clear()
 
     def test_table_2_interrupted(self):

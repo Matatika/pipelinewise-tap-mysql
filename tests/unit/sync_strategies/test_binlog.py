@@ -811,12 +811,12 @@ class TestBinlogSyncStrategy(TestCase):
                                              'bookmarks': {
                                                  'my_db-stream1': {
                                                      'log_file': 'binlog0003',
-                                                     'log_pos': 999,
+                                                     'log_pos': 1000,
                                                      'version': 1
                                                  },
                                                  'my_db-stream2': {
                                                      'log_file': 'binlog0003',
-                                                     'log_pos': 999,
+                                                     'log_pos': 1000,
                                                      'version': 1
                                                  },
 
@@ -1600,13 +1600,13 @@ class TestBinlogSyncStrategy(TestCase):
                                                  'my_db-stream1': {
                                                      'gtid': '0-123-558',
                                                      'log_file': 'binlog0003',
-                                                     'log_pos': 999,
+                                                     'log_pos': 1000,
                                                      'version': 1,
                                                  },
                                                  'my_db-stream2': {
                                                      'gtid': '0-123-558',
                                                      'log_file': 'binlog0003',
-                                                     'log_pos': 999,
+                                                     'log_pos': 1000,
                                                      'version': 1
                                                  },
 

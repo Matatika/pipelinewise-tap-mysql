@@ -145,7 +145,7 @@ def should_run_discovery(column_names: Set[str], md_map: Dict[Tuple, Dict]) -> b
             LOGGER.debug('Will run discovery because `%s` not in stream metadata', column_name)
             return True
 
-        if md_properties['selected-by-default'] and is_supported_column_type(md_properties['datatype']):
+        if md_properties.get('selected-by-default') and is_supported_column_type(md_properties.get('datatype', '')):
             LOGGER.debug('Will run discovery because `%s` is selected by default and of supported type', column_name)
             return True
 
@@ -248,7 +248,7 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
                                             is_view)
 
                 def column_is_key_prop(c, s):
-                    return (c.column_key == 'PRI' and s.properties[c.column_name].inclusion != 'unsupported')
+                    return c.column_key == 'PRI' and s.properties[c.column_name].inclusion != 'unsupported'
 
                 key_properties = [c.column_name for c in cols if column_is_key_prop(c, schema)]
 

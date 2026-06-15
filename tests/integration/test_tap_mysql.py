@@ -467,6 +467,7 @@ def message_types_and_versions(messages):
 class TestStreamVersionFullTable(unittest.TestCase):
 
     def setUp(self):
+        self._original_get_stream_version = common.get_stream_version
         self.conn = test_utils.get_test_connection()
 
         with connect_with_backoff(self.conn) as open_conn:
@@ -485,6 +486,9 @@ class TestStreamVersionFullTable(unittest.TestCase):
 
             stream.stream = stream.table
             test_utils.set_replication_method_and_key(stream, 'FULL_TABLE', None)
+
+    def tearDown(self):
+        common.get_stream_version = self._original_get_stream_version
 
     def test_with_no_state(self):
         state = {}
@@ -707,6 +711,9 @@ class TestBinlogReplication(unittest.TestCase):
         self.maxDiff = None
         self.state = {}
         self.conn = test_utils.get_test_connection()
+
+        global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
 
         log_file, log_pos = binlog.fetch_current_log_file_and_pos(self.conn)
 

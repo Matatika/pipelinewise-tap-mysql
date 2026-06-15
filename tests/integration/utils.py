@@ -2,6 +2,7 @@ import os
 
 import pymysql
 import singer
+import singer.metadata
 
 import tap_mysql
 import tap_mysql.sync_strategies.common as common
