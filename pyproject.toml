@@ -1,3 +1,54 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pipelinewise-tap-mysql"
+dynamic = ["version"]
+description = "Singer.io tap for extracting data from MySQL & MariaDB - PipelineWise compatible"
+readme = "README.md"
+license = "AGPL-3.0-only"
+authors = [
+    {name = "Wise"},
+]
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pendulum==3.2.0",
+    "pipelinewise-singer-python==1.*",
+    "mysql-replication==0.43",
+    "mysql-connector-python==9.7.0",
+    "plpygis==0.6.1",
+    "cryptography",
+    "orjson",
+    "tzlocal==5.3.1",
+    'backports-datetime-fromisoformat>=2.0.1; python_version<"3.11"',
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "python-dotenv",
+]
+
+[project.urls]
+Homepage = "https://github.com/transferwise/pipelinewise-tap-mysql"
+
+[project.scripts]
+tap-mysql = "tap_mysql:main"
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "1.5.6"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tap_mysql"]
+
 [tool.pytest]
 testpaths = ["tests"]
 
