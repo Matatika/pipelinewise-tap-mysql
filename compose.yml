@@ -16,6 +16,13 @@ services:
       --default-authentication-plugin=mysql_native_password
       --log-bin=mysql-bin
       --binlog-format=ROW
+      --binlog-row-metadata=FULL
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - mariadb-cluster
 
@@ -39,6 +46,13 @@ services:
       - --log-replica-updates=ON
       - --log-bin=binlog
       - --binlog-format=ROW
+      - --binlog-row-metadata=FULL
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pmaster1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - mariadb-cluster
 
