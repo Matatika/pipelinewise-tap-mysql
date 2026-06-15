@@ -2,14 +2,14 @@
 
 import collections
 import itertools
+from typing import Dict, List, Optional, Set, Tuple
+
 import pendulum
 import pymysql
-
-from typing import Optional, Dict, Tuple, Set, List
-from singer import metadata, Schema, get_logger
+from singer import Schema, get_logger, metadata
 from singer.catalog import Catalog, CatalogEntry
 
-from tap_mysql.connection import connect_with_backoff, MySQLConnection
+from tap_mysql.connection import MySQLConnection, connect_with_backoff
 from tap_mysql.sync_strategies import common
 
 LOGGER = get_logger('tap_mysql')
@@ -215,8 +215,8 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
                                             'is-view',
                                             is_view)
 
-                column_is_key_prop = lambda c, s: (c.column_key == 'PRI' and
-                                                   s.properties[c.column_name].inclusion != 'unsupported')
+                def column_is_key_prop(c, s):
+                    return (c.column_key == 'PRI' and s.properties[c.column_name].inclusion != 'unsupported')
 
                 key_properties = [c.column_name for c in cols if column_is_key_prop(c, schema)]
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # pylint: disable=missing-docstring,arguments-differ,missing-function-docstring
 
+import ssl
+
 import backoff
 import pymysql
 import pymysql.cursors
-import ssl
 import singer
-
 from pymysql.constants import CLIENT
 
 LOGGER = singer.get_logger('tap_mysql')

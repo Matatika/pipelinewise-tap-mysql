@@ -29,9 +29,9 @@ setup(name='pipelinewise-tap-mysql',
       ],
       extras_require={
           'test': [
-              'nose==1.3.*',
-              'pylint==2.13.2',
-              'nose-cov==1.6'
+              'pytest',
+              'pytest-cov',
+              'ruff',
           ]
       },
       entry_points='''
