@@ -1,9 +1,7 @@
-version: '3.7'
-
 services:
   mariadb_server1:
     container_name: "mariadb_server1"
-    image: mariadb:10.6
+    image: mariadb:11.4
     volumes:
       - ./dev/init.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
@@ -23,7 +21,7 @@ services:
 
   mysql_server:
     container_name: 'mysql_server'
-    image: mysql:5.7
+    image: mysql:8.4
     ports:
       - "3307:3306"
     environment:
@@ -37,10 +35,8 @@ services:
       - --server-id=1
       - --gtid-mode=ON
       - --enforce-gtid-consistency=ON
-      - --master-info-repository=TABLE
-      - --relay-log-info-repository=TABLE
       - --binlog-checksum=NONE
-      - --log-slave-updates=ON
+      - --log-replica-updates=ON
       - --log-bin=binlog
       - --binlog-format=ROW
     networks:
