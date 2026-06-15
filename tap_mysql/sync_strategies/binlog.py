@@ -26,7 +26,7 @@ from singer import Schema, metadata, utils
 from tap_mysql import connection, stream_utils
 from tap_mysql.connection import MySQLConnection, connect_with_backoff, make_connection_wrapper
 from tap_mysql.discover_utils import desired_columns, discover_catalog, should_run_discovery
-from tap_mysql.stream_utils import write_schema_message
+from tap_mysql.stream_utils import FastRecordMessage, write_schema_message
 from tap_mysql.sync_strategies import common
 
 LOGGER = singer.get_logger('tap_mysql')
@@ -269,11 +269,11 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
         else:
             row_to_persist[column_name] = val
 
-    return singer.RecordMessage(
+    return FastRecordMessage(
         stream=catalog_entry.stream,
         record=row_to_persist,
         version=version,
-        time_extracted=time_extracted)
+        time_extracted_str=time_extracted)
 
 
 def calculate_gtid_bookmark(
@@ -678,7 +678,7 @@ def _run_binlog_sync(
             reader.auto_position = gtid_pos
 
         else:
-            time_extracted = utils.now()
+            time_extracted = utils.strftime(utils.now())
 
             tap_stream_id = common.generate_tap_stream_id(binlog_event.schema, binlog_event.table)
             streams_map_entry = binlog_streams_map.get(tap_stream_id, {})
