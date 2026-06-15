@@ -2,6 +2,7 @@
 
 import collections
 import itertools
+import re
 from typing import Dict, List, Optional, Set, Tuple
 
 import pendulum
@@ -58,6 +59,25 @@ BINARY_TYPES = {'binary', 'varbinary'}
 SPATIAL_TYPES = {'geometry', 'point', 'linestring',
                  'polygon', 'multipoint', 'multilinestring',
                  'multipolygon', 'geometrycollection'}
+
+_INTEGER_DISPLAY_WIDTH_RE = re.compile(r'^(tinyint|smallint|mediumint|int|bigint|year)\((\d+)\)(.*)')
+
+
+def _normalize_column_type(column_type: str) -> str:
+    """Strip default display widths from integer/year types for cross-version consistency.
+
+    MySQL 8.0.17+ removed display widths for integer types (e.g. bigint(20) -> bigint),
+    but MariaDB still reports them. This normalizes both to the same format.
+    Exception: tinyint(1) unsigned is preserved as-is (non-default, user-meaningful width).
+    """
+    m = _INTEGER_DISPLAY_WIDTH_RE.match(column_type)
+    if m:
+        base_type, width, modifiers = m.group(1), m.group(2), m.group(3).strip()
+        if base_type == 'tinyint' and width == '1' and modifiers == 'unsigned':
+            return column_type
+        return (base_type + (' ' + modifiers if modifiers else '')).strip()
+    return column_type
+
 
 # A set of all supported column types listed above
 SUPPORTED_COLUMN_TYPES_AGGREGATED = \
@@ -311,7 +331,7 @@ def create_column_metadata(cols: List[Column]):
 
         mdata = metadata.write(mdata,
                                ('properties', col.column_name),
-                               'sql-datatype', col.column_type.lower())
+                               'sql-datatype', _normalize_column_type(col.column_type.lower()))
 
 
         mdata = metadata.write(mdata,

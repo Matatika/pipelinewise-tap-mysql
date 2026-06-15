@@ -118,7 +118,7 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=127))
         self.assertEqual(self.get_metadata_for_column('c_tinyint'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'tinyint(4)',
+                          'sql-datatype': 'tinyint',
                           'datatype': 'tinyint'})
 
     def test_tinyint_1(self):
@@ -127,7 +127,7 @@ class TestTypeMapping(unittest.TestCase):
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_tinyint_1'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'tinyint(1)',
+                          'sql-datatype': 'tinyint',
                           'datatype': 'tinyint'})
 
     def test_tinyint_1_unsigned(self):
@@ -147,7 +147,7 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=32767))
         self.assertEqual(self.get_metadata_for_column('c_smallint'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'smallint(6)',
+                          'sql-datatype': 'smallint',
                           'datatype': 'smallint'})
 
     def test_mediumint(self):
@@ -158,7 +158,7 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=8388607))
         self.assertEqual(self.get_metadata_for_column('c_mediumint'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'mediumint(9)',
+                          'sql-datatype': 'mediumint',
                           'datatype': 'mediumint'})
 
     def test_int(self):
@@ -169,7 +169,7 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=2147483647))
         self.assertEqual(self.get_metadata_for_column('c_int'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'int(11)',
+                          'sql-datatype': 'int',
                           'datatype': 'int'})
 
     def test_bigint(self):
@@ -180,7 +180,7 @@ class TestTypeMapping(unittest.TestCase):
                                 maximum=9223372036854775807))
         self.assertEqual(self.get_metadata_for_column('c_bigint'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'bigint(20)',
+                          'sql-datatype': 'bigint',
                           'datatype': 'bigint'})
 
     def test_bigint_unsigned(self):
@@ -192,7 +192,7 @@ class TestTypeMapping(unittest.TestCase):
 
         self.assertEqual(self.get_metadata_for_column('c_bigint_unsigned'),
                          {'selected-by-default': True,
-                          'sql-datatype': 'bigint(20) unsigned',
+                          'sql-datatype': 'bigint unsigned',
                           'datatype': 'bigint'})
 
     def test_float(self):
@@ -247,7 +247,7 @@ class TestTypeMapping(unittest.TestCase):
                          'unsupported')
         self.assertEqual(self.get_metadata_for_column('c_year'),
                          {'selected-by-default': False,
-                          'sql-datatype': 'year(4)',
+                          'sql-datatype': 'year',
                           'datatype': 'year'})
 
     def test_pk(self):
