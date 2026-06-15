@@ -210,9 +210,7 @@ class TestBinlogSyncStrategy(TestCase):
             }
         }
 
-        with patch('tap_mysql.sync_strategies.binlog.write_message') as write_msg, \
-                patch('tap_mysql.stream_utils.write_message', write_msg):
-
+        with patch('tap_mysql.stream_utils.write_message') as write_msg:
             write_msg.side_effect = lambda msg: singer_messages.append(msg)
 
             with patch('tap_mysql.sync_strategies.binlog.BinLogStreamReader',
@@ -992,9 +990,7 @@ class TestBinlogSyncStrategy(TestCase):
             }
         }
 
-        with patch('tap_mysql.sync_strategies.binlog.write_message') as write_msg, \
-                patch('tap_mysql.stream_utils.write_message', write_msg):
-
+        with patch('tap_mysql.stream_utils.write_message') as write_msg:
             write_msg.side_effect = lambda msg: singer_messages.append(msg)
 
             with patch('tap_mysql.sync_strategies.binlog.BinLogStreamReader',
