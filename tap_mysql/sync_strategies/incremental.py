@@ -7,8 +7,8 @@ import pendulum
 import singer
 from singer import metadata
 
-from tap_mysql.connection import connect_with_backoff
 from tap_mysql import stream_utils
+from tap_mysql.connection import connect_with_backoff
 from tap_mysql.sync_strategies import common
 
 BOOKMARK_KEYS = {'replication_key', 'replication_key_value', 'version'}

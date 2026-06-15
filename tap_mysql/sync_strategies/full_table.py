@@ -4,8 +4,8 @@
 import singer
 from singer import metadata
 
-from tap_mysql.connection import connect_with_backoff
 from tap_mysql import stream_utils
+from tap_mysql.connection import connect_with_backoff
 from tap_mysql.sync_strategies import binlog, common
 
 LOGGER = singer.get_logger('tap_mysql')

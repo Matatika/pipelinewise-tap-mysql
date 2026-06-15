@@ -23,10 +23,9 @@ from pymysqlreplication.row_event import (
 )
 from singer import Schema, metadata, utils
 
-from tap_mysql import connection
+from tap_mysql import connection, stream_utils
 from tap_mysql.connection import MySQLConnection, connect_with_backoff, make_connection_wrapper
 from tap_mysql.discover_utils import desired_columns, discover_catalog, should_run_discovery
-from tap_mysql import stream_utils
 from tap_mysql.stream_utils import write_schema_message
 from tap_mysql.sync_strategies import common
 
