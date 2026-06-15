@@ -13,6 +13,29 @@ def _orjson_default(obj):
     raise TypeError(f'Object of type {type(obj)} is not JSON serializable')
 
 
+class FastRecordMessage(singer.RecordMessage):
+    """RecordMessage subclass that avoids strftime on every record.
+
+    Pass time_extracted as an already-formatted string (call utils.strftime once
+    before the loop and reuse it across all rows in the same sync pass).
+    Inheriting from RecordMessage preserves isinstance checks and __eq__ via asdict().
+    """
+
+    def __init__(self, stream, record, version, time_extracted_str):
+        self.stream = stream
+        self.record = record
+        self.version = version
+        self.time_extracted = time_extracted_str  # already a string — no tzinfo check
+
+    def asdict(self):
+        result = {'type': 'RECORD', 'stream': self.stream, 'record': self.record}
+        if self.version is not None:
+            result['version'] = self.version
+        if self.time_extracted:
+            result['time_extracted'] = self.time_extracted
+        return result
+
+
 def write_message(message):
     sys.stdout.write(orjson.dumps(message.asdict(), default=_orjson_default).decode() + '\n')
     sys.stdout.flush()

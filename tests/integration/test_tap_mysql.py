@@ -472,9 +472,11 @@ def message_types_and_versions(messages):
     message_types = []
     versions = []
     for message in messages:
-        t = type(message)
-        if t in {singer.RecordMessage, singer.ActivateVersionMessage}:
-            message_types.append(t.__name__)
+        if isinstance(message, singer.RecordMessage):
+            message_types.append('RecordMessage')
+            versions.append(message.version)
+        elif isinstance(message, singer.ActivateVersionMessage):
+            message_types.append('ActivateVersionMessage')
             versions.append(message.version)
     return message_types, versions
 
@@ -806,7 +808,10 @@ class TestBinlogReplication(unittest.TestCase):
 
         tap_mysql.do_sync(self.conn, {}, self.catalog, state)
 
-        message_types = [type(m) for m in SINGER_MESSAGES]
+        def _norm(m):
+            return singer.RecordMessage if isinstance(m, singer.RecordMessage) else type(m)
+
+        message_types = [_norm(m) for m in SINGER_MESSAGES]
 
         self.assertEqual(message_types,
                          [singer.StateMessage,
@@ -899,7 +904,10 @@ class TestBinlogReplication(unittest.TestCase):
 
         record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
 
-        message_types = [type(m) for m in SINGER_MESSAGES]
+        def _norm(m):
+            return singer.RecordMessage if isinstance(m, singer.RecordMessage) else type(m)
+
+        message_types = [_norm(m) for m in SINGER_MESSAGES]
         self.assertEqual(message_types,
                          [singer.StateMessage,
                           singer.SchemaMessage,
@@ -969,7 +977,10 @@ class TestBinlogReplication(unittest.TestCase):
 
         record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
 
-        message_types = [type(m) for m in SINGER_MESSAGES]
+        def _norm(m):
+            return singer.RecordMessage if isinstance(m, singer.RecordMessage) else type(m)
+
+        message_types = [_norm(m) for m in SINGER_MESSAGES]
         self.assertEqual(message_types,
                          [singer.StateMessage,
                           singer.SchemaMessage,
@@ -1063,7 +1074,10 @@ class TestBinlogReplication(unittest.TestCase):
 
         record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
 
-        message_types = [type(m) for m in SINGER_MESSAGES]
+        def _norm(m):
+            return singer.RecordMessage if isinstance(m, singer.RecordMessage) else type(m)
+
+        message_types = [_norm(m) for m in SINGER_MESSAGES]
         self.assertEqual(message_types,
                          [singer.StateMessage,
                           singer.SchemaMessage,
@@ -1140,7 +1154,10 @@ class TestBinlogReplication(unittest.TestCase):
 
         record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
 
-        message_types = [type(m) for m in SINGER_MESSAGES]
+        def _norm(m):
+            return singer.RecordMessage if isinstance(m, singer.RecordMessage) else type(m)
+
+        message_types = [_norm(m) for m in SINGER_MESSAGES]
         self.assertEqual(message_types,
                          [singer.StateMessage,
                           singer.SchemaMessage,

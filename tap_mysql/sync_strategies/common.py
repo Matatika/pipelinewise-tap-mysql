@@ -8,7 +8,7 @@ import singer
 from singer import metadata, metrics, utils
 
 from tap_mysql import stream_utils
-from tap_mysql.stream_utils import get_key_properties
+from tap_mysql.stream_utils import FastRecordMessage, get_key_properties
 
 LOGGER = singer.get_logger('tap_mysql')
 
@@ -90,7 +90,7 @@ def generate_select_sql(catalog_entry, columns):
     return select_sql
 
 
-def row_to_singer_record(catalog_entry, version, row, columns, time_extracted):
+def row_to_singer_record(catalog_entry, version, row, columns, time_extracted_str):
     row_to_persist = ()
     for idx, elem in enumerate(row):
         property_type = catalog_entry.schema.properties[columns[idx]].type
@@ -106,7 +106,7 @@ def row_to_singer_record(catalog_entry, version, row, columns, time_extracted):
             if property_format == 'time':
                 row_to_persist += (str(elem),) # this should convert time column into 'HH:MM:SS' formatted string
             else:
-                epoch = datetime.datetime.utcfromtimestamp(0)
+                epoch = datetime.datetime.fromtimestamp(0, tz=datetime.timezone.utc)
                 timedelta_from_epoch = epoch + elem
                 row_to_persist += (timedelta_from_epoch.isoformat() + '+00:00',)
 
@@ -123,11 +123,11 @@ def row_to_singer_record(catalog_entry, version, row, columns, time_extracted):
             row_to_persist += (elem,)
     rec = dict(zip(columns, row_to_persist))
 
-    return singer.RecordMessage(
+    return FastRecordMessage(
         stream=catalog_entry.stream,
         record=rec,
         version=version,
-        time_extracted=time_extracted)
+        time_extracted_str=time_extracted_str)
 
 
 def whitelist_bookmark_keys(bookmark_key_set, tap_stream_id, state):
@@ -146,6 +146,7 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                           'replication_key')
 
     time_extracted = utils.now()
+    time_extracted_str = utils.strftime(time_extracted)
 
     LOGGER.info('Running %s', select_sql)
     cursor.execute(select_sql, params)
@@ -153,6 +154,11 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
     rows_saved = 0
 
     database_name = get_database_name(catalog_entry)
+
+    md_map = metadata.to_map(catalog_entry.metadata)
+    stream_metadata = md_map.get((), {})
+    replication_method = stream_metadata.get('replication-method')
+    key_properties = get_key_properties(catalog_entry) if replication_method in {'FULL_TABLE', 'LOG_BASED'} else []
 
     with metrics.record_counter(None) as counter:
         counter.tags['database'] = database_name
@@ -170,16 +176,10 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       stream_version,
                                                       row,
                                                       columns,
-                                                      time_extracted)
+                                                      time_extracted_str)
                 stream_utils.write_message(record_message)
 
-                md_map = metadata.to_map(catalog_entry.metadata)
-                stream_metadata = md_map.get((), {})
-                replication_method = stream_metadata.get('replication-method')
-
                 if replication_method in {'FULL_TABLE', 'LOG_BASED'}:
-                    key_properties = get_key_properties(catalog_entry)
-
                     max_pk_values = singer.get_bookmark(state,
                                                         catalog_entry.tap_stream_id,
                                                         'max_pk_values')
