@@ -1,7 +1,21 @@
 # pylint: disable=missing-docstring,too-many-locals
+import sys
+from decimal import Decimal
 
+import orjson
 import singer
 from singer import metadata
+
+
+def _orjson_default(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError(f'Object of type {type(obj)} is not JSON serializable')
+
+
+def write_message(message):
+    sys.stdout.write(orjson.dumps(message.asdict(), default=_orjson_default).decode() + '\n')
+    sys.stdout.flush()
 
 
 def write_schema_message(catalog_entry, bookmark_properties=None):
@@ -10,7 +24,7 @@ def write_schema_message(catalog_entry, bookmark_properties=None):
 
     key_properties = get_key_properties(catalog_entry)
 
-    singer.write_message(singer.SchemaMessage(
+    write_message(singer.SchemaMessage(
         stream=catalog_entry.stream,
         schema=catalog_entry.schema.to_dict(),
         key_properties=key_properties,

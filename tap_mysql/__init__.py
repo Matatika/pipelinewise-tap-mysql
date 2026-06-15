@@ -1,33 +1,18 @@
 # pylint: disable=missing-docstring,too-many-locals
 import copy
-from decimal import Decimal
 
 import mysql.connector.errors
-import orjson
 import singer
-import singer.messages as _singer_messages
 from singer import get_logger, metadata, metrics
 from singer.catalog import Catalog
 
+from tap_mysql import stream_utils
 from tap_mysql.connection import MYSQL_ENGINE, MySQLConnection, connect_with_backoff
 from tap_mysql.discover_utils import discover_catalog, resolve_catalog
 from tap_mysql.stream_utils import write_schema_message
 from tap_mysql.sync_strategies import binlog, common, full_table, incremental
 
 LOGGER = get_logger('tap_mysql')
-
-
-def _orjson_default(obj):
-    if isinstance(obj, Decimal):
-        return float(obj)
-    raise TypeError(f'Object of type {type(obj)} is not JSON serializable')
-
-
-def _format_message(message):
-    return orjson.dumps(message.asdict(), default=_orjson_default).decode()
-
-
-_singer_messages.format_message = _format_message
 
 REQUIRED_CONFIG_KEYS = [
     'host',
@@ -211,7 +196,7 @@ def do_sync_incremental(mysql_conn, catalog_entry, state, columns):
 
     incremental.sync_table(mysql_conn, catalog_entry, state, columns)
 
-    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
 
 # pylint: disable=too-many-arguments
@@ -327,7 +312,7 @@ def do_sync_full_table(mysql_conn, catalog_entry, state, columns):
                                   'initial_full_table_complete',
                                   True)
 
-    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
 
 def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, engine):
@@ -341,7 +326,7 @@ def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, eng
         state = singer.set_currently_syncing(state, catalog_entry.tap_stream_id)
 
         # Emit a state message to indicate that we've started this stream
-        singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
         md_map = metadata.to_map(catalog_entry.metadata)
 
@@ -365,7 +350,7 @@ def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, eng
                 raise Exception("only INCREMENTAL, LOG_BASED, and FULL TABLE replication methods are supported")
 
     state = singer.set_currently_syncing(state, None)
-    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
 
 def sync_binlog_streams(mysql_conn, binlog_catalog, config, state):

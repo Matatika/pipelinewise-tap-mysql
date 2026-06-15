@@ -4,6 +4,7 @@
 import singer
 from singer import metadata
 
+from tap_mysql import stream_utils
 from tap_mysql.connection import connect_with_backoff
 from tap_mysql.sync_strategies import binlog, common
 
@@ -132,7 +133,7 @@ def sync_table(mysql_conn, catalog_entry, state, columns, stream_version):
     # For the initial replication, emit an ACTIVATE_VERSION message
     # at the beginning so the records show up right away.
     if not initial_full_table_complete and not (version_exists and state_version is None):
-        singer.write_message(activate_version_message)
+        stream_utils.write_message(activate_version_message)
 
     key_props_are_auto_incrementing = pks_are_auto_incrementing(mysql_conn, catalog_entry)
 
@@ -173,4 +174,4 @@ def sync_table(mysql_conn, catalog_entry, state, columns, stream_version):
     singer.clear_bookmark(state, catalog_entry.tap_stream_id, 'max_pk_values')
     singer.clear_bookmark(state, catalog_entry.tap_stream_id, 'last_pk_fetched')
 
-    singer.write_message(activate_version_message)
+    stream_utils.write_message(activate_version_message)

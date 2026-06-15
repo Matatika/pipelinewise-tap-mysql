@@ -7,6 +7,7 @@ import pendulum
 import singer
 from singer import metadata
 
+from tap_mysql import stream_utils
 from tap_mysql.connection import connect_with_backoff
 from tap_mysql.sync_strategies import common
 
@@ -48,7 +49,7 @@ def sync_table(mysql_conn, catalog_entry, state, columns):
         version=stream_version
     )
 
-    singer.write_message(activate_version_message)
+    stream_utils.write_message(activate_version_message)
 
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
