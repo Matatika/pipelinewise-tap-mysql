@@ -8,7 +8,7 @@ import re
 import socket
 from typing import Any, Dict, Optional, Set, Tuple, Union
 
-import pymysql.err
+import mysql.connector.errors
 import pytz
 import singer
 import tzlocal
@@ -65,8 +65,8 @@ def verify_binlog_config(mysql_conn):
             try:
                 cur.execute("SELECT  @@binlog_row_image")
                 binlog_row_image = cur.fetchone()[0]
-            except pymysql.err.InternalError as ex:
-                if ex.args[0] == 1193:
+            except mysql.connector.errors.InternalError as ex:
+                if ex.errno == 1193:
                     raise Exception("Unable to replicate binlog stream because binlog_row_image "
                                     "system variable does not exist. MySQL version must be at "
                                     "least 5.6.2 to use binlog replication.") from ex

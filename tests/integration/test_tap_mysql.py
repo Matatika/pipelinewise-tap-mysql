@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-import pymysql
+import mysql.connector.errors
 import singer
 import singer.metadata
 
@@ -1405,7 +1405,7 @@ class TestSessionSqls(unittest.TestCase):
 
     def run_sql_mock(self, connection, sql):
         if sql.startswith('INVALID-SQL'):
-            raise pymysql.err.InternalError
+            raise mysql.connector.errors.InternalError
 
         self.executed_queries.append(sql)
 

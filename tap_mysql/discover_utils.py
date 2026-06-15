@@ -5,8 +5,6 @@ import itertools
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-import pendulum
-import pymysql
 from singer import Schema, get_logger, metadata
 from singer.catalog import Catalog, CatalogEntry
 
@@ -25,8 +23,6 @@ Column = collections.namedtuple('Column', [
     "numeric_scale",
     "column_type",
     "column_key"])
-
-pymysql.converters.conversions[pendulum.DateTime] = pymysql.converters.escape_datetime
 
 STRING_TYPES = {
     'char',
