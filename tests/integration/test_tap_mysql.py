@@ -8,17 +8,17 @@ import singer.metadata
 
 import tap_mysql
 import tap_mysql.discover_utils
-from tap_mysql.connection import connect_with_backoff, MySQLConnection, fetch_server_id, MYSQL_ENGINE, MARIADB_ENGINE
+from tap_mysql.connection import MARIADB_ENGINE, MYSQL_ENGINE, MySQLConnection, connect_with_backoff
 
 try:
     import tests.integration.utils as test_utils
 except ImportError:
     import utils as test_utils
 
+from singer.schema import Schema
+
 import tap_mysql.sync_strategies.binlog as binlog
 import tap_mysql.sync_strategies.common as common
-
-from singer.schema import Schema
 
 SINGER_MESSAGES = []
 
