@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # pylint: disable=missing-docstring,arguments-differ,missing-function-docstring
 
+import os
 import ssl
+import tempfile
 
 import backoff
 import mysql.connector
@@ -75,7 +77,19 @@ class MySQLConnection:
     def __init__(self, config):
         self._config = config
         self._conn = None
+        self._ssl_temp_files: list[str] = []
         self.session_sqls = config.get('session_sqls', DEFAULT_SESSION_SQLS)
+
+    @staticmethod
+    def _write_ssl_tempfile(pem_data: str) -> str:
+        """Write PEM data to a private temp file, returning its path."""
+        fd, path = tempfile.mkstemp(suffix='.pem')
+        try:
+            os.write(fd, pem_data.encode('utf-8'))
+        finally:
+            os.close(fd)
+        os.chmod(path, 0o600)
+        return path
 
     def connect(self):
         config = self._config
@@ -97,14 +111,12 @@ class MySQLConnection:
         if use_self_signed_ssl:
             LOGGER.info('Using custom certificate authority')
 
-            with open('ca.pem', 'wb') as f:
-                f.write(config['ssl_ca'].encode('utf-8'))
-            with open('cert.pem', 'wb') as f:
-                f.write(config['ssl_cert'].encode('utf-8'))
-            with open('key.pem', 'wb') as f:
-                f.write(config['ssl_key'].encode('utf-8'))
+            ca_path = self._write_ssl_tempfile(config['ssl_ca'])
+            cert_path = self._write_ssl_tempfile(config['ssl_cert'])
+            key_path = self._write_ssl_tempfile(config['ssl_key'])
+            self._ssl_temp_files = [ca_path, cert_path, key_path]
 
-            args.update({'ssl_ca': './ca.pem', 'ssl_cert': './cert.pem', 'ssl_key': './key.pem'})
+            args.update({'ssl_ca': ca_path, 'ssl_cert': cert_path, 'ssl_key': key_path})
 
             if config.get('internal_hostname') and MATCH_HOSTNAME is not None:
                 parsed_hostname = parse_internal_hostname(config['internal_hostname'])
@@ -137,6 +149,12 @@ class MySQLConnection:
                 self._conn.close()
             finally:
                 self._conn = None
+        for path in self._ssl_temp_files:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._ssl_temp_files = []
 
     def __enter__(self):
         return self
