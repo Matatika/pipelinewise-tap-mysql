@@ -2,14 +2,19 @@
 # pylint: disable=missing-function-docstring
 
 import datetime
+import sys
 
-import pendulum
 import singer
 from singer import metadata
 
 from tap_mysql import stream_utils
 from tap_mysql.connection import connect_with_backoff
 from tap_mysql.sync_strategies import common
+
+if sys.version_info < (3, 11):
+    from backports.datetime_fromisoformat import MonkeyPatch
+
+    MonkeyPatch.patch_fromisoformat()
 
 BOOKMARK_KEYS = {'replication_key', 'replication_key_value', 'version'}
 
@@ -58,7 +63,7 @@ def sync_table(mysql_conn, catalog_entry, state, columns):
 
             if replication_key_value is not None:
                 if catalog_entry.schema.properties[replication_key_metadata].format == 'date-time':
-                    replication_key_value = pendulum.instance(datetime.datetime.fromisoformat(replication_key_value))
+                    replication_key_value = datetime.datetime.fromisoformat(replication_key_value)
 
                 select_sql += f" WHERE `{replication_key_metadata}` >= %(replication_key_value)s " \
                               f"ORDER BY `{replication_key_metadata}` ASC"
