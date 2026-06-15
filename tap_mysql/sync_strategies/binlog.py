@@ -8,7 +8,6 @@ import re
 import socket
 from typing import Any, Dict, Optional, Set, Tuple, Union
 
-import pymysql.connections
 import pymysql.err
 import pytz
 import singer
@@ -209,7 +208,8 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
     for column_name, val in row.items():
         property_type = catalog_entry.schema.properties[column_name].type
         property_format = catalog_entry.schema.properties[column_name].format
-        db_column_type = db_column_map.get(column_name)
+        db_column = db_column_map.get(column_name)
+        db_column_type = db_column.type if db_column else None
 
         if isinstance(val, datetime.datetime):
             if db_column_type in MYSQL_TIMESTAMP_TYPES:
@@ -232,7 +232,7 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
                 # this should convert time column into 'HH:MM:SS' formatted string
                 row_to_persist[column_name] = str(val)
             else:
-                timedelta_from_epoch = datetime.datetime.utcfromtimestamp(0) + val
+                timedelta_from_epoch = datetime.datetime.fromtimestamp(0, tz=datetime.timezone.utc) + val
                 row_to_persist[column_name] = timedelta_from_epoch.isoformat() + '+00:00'
 
         elif db_column_type == FIELD_TYPE.JSON:
@@ -247,8 +247,13 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
                 row_to_persist[column_name] = None
 
         elif isinstance(val, bytes):
-            # encode bytes as hex bytes then to utf8 string
-            row_to_persist[column_name] = codecs.encode(val, 'hex').decode('utf-8')
+            # encode bytes as hex; pad to column's declared max_length for BINARY(N) columns
+            # (mysql-replication 1.0.x strips trailing null bytes from BINARY values)
+            hex_val = codecs.encode(val, 'hex').decode('utf-8')
+            max_length = getattr(db_column, 'max_length', None)
+            if max_length is not None:
+                hex_val = hex_val.ljust(max_length * 2, '0')
+            row_to_persist[column_name] = hex_val
 
         elif 'boolean' in property_type or property_type == 'boolean':
             if val is None:
@@ -478,7 +483,7 @@ def update_bookmarks(
 
 
 def get_db_column_types(event):
-    return {c.name: c.type for c in event.columns}
+    return {c.name: c for c in event.columns}
 
 
 def handle_write_rows_event(event, catalog_entry, state, columns, rows_saved, time_extracted):
@@ -526,8 +531,7 @@ def handle_delete_rows_event(event, catalog_entry, state, columns, rows_saved, t
     stream_version = common.get_stream_version(catalog_entry.tap_stream_id, state)
     db_column_types = get_db_column_types(event)
 
-    event_ts = datetime.datetime.utcfromtimestamp(event.timestamp) \
-        .replace(tzinfo=pytz.UTC).isoformat()
+    event_ts = datetime.datetime.fromtimestamp(event.timestamp, tz=datetime.timezone.utc).isoformat()
 
     for row in event.rows:
         vals = row['values']
@@ -588,7 +592,8 @@ def __get_diff_in_columns_list(
     # we also will ignore any column using the given ignore_columns argument.
     binlog_columns_filtered = filter(
         lambda col_name, ignored_cols=ignore_columns:
-        not bool(re.match(r'__dropped_col_\d+__', col_name) or col_name in ignored_cols),
+        col_name is not None
+        and not bool(re.match(r'__dropped_col_\d+__', col_name) or col_name in ignored_cols),
         [col.name for col in binlog_event.columns])
 
     return set(binlog_columns_filtered).difference(schema_properties)
@@ -784,6 +789,14 @@ def _run_binlog_sync(
             singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
     LOGGER.info('Processed %s rows', processed_rows_events)
+
+    # reader.log_pos is the START of the last returned event, not the end.
+    # Filtered events (XID, GTID) after the last DML event advance the master's
+    # position but are never surfaced to the loop, so the loop exits naturally
+    # with log_pos < end_log_pos and the last DML event gets replayed next run.
+    # Advance to end_log_pos whenever the loop exhausted the stream without break.
+    if log_file and log_pos and log_file == end_log_file and log_pos < end_log_pos:
+        log_pos = end_log_pos
 
     # Update singer bookmark at the last time to point it the last processed binlog event
     if log_file and log_pos:

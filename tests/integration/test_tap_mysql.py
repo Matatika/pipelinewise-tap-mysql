@@ -131,13 +131,27 @@ class TestTypeMapping(unittest.TestCase):
                           'datatype': 'tinyint'})
 
     def test_tinyint_1_unsigned(self):
-        self.assertEqual(self.schema.properties['c_tinyint_1_unsigned'],
-                         Schema(['null', 'boolean'],
-                                inclusion='available'))
-        self.assertEqual(self.get_metadata_for_column('c_tinyint_1_unsigned'),
-                         {'selected-by-default': True,
-                          'sql-datatype': 'tinyint(1) unsigned',
-                          'datatype': 'tinyint'})
+        engine = os.getenv('TAP_MYSQL_ENGINE', MYSQL_ENGINE)
+        if engine == MYSQL_ENGINE:
+            # MySQL 8.0.17+ strips the display width from TINYINT(1) UNSIGNED, making it
+            # indistinguishable from TINYINT UNSIGNED — boolean detection is not possible.
+            self.assertEqual(self.schema.properties['c_tinyint_1_unsigned'],
+                             Schema(['null', 'integer'],
+                                    inclusion='available',
+                                    minimum=0,
+                                    maximum=255))
+            self.assertEqual(self.get_metadata_for_column('c_tinyint_1_unsigned'),
+                             {'selected-by-default': True,
+                              'sql-datatype': 'tinyint unsigned',
+                              'datatype': 'tinyint'})
+        else:
+            self.assertEqual(self.schema.properties['c_tinyint_1_unsigned'],
+                             Schema(['null', 'boolean'],
+                                    inclusion='available'))
+            self.assertEqual(self.get_metadata_for_column('c_tinyint_1_unsigned'),
+                             {'selected-by-default': True,
+                              'sql-datatype': 'tinyint(1) unsigned',
+                              'datatype': 'tinyint'})
 
     def test_smallint(self):
         self.assertEqual(self.schema.properties['c_smallint'],
@@ -467,6 +481,7 @@ def message_types_and_versions(messages):
 class TestStreamVersionFullTable(unittest.TestCase):
 
     def setUp(self):
+        self._original_get_stream_version = common.get_stream_version
         self.conn = test_utils.get_test_connection()
 
         with connect_with_backoff(self.conn) as open_conn:
@@ -485,6 +500,9 @@ class TestStreamVersionFullTable(unittest.TestCase):
 
             stream.stream = stream.table
             test_utils.set_replication_method_and_key(stream, 'FULL_TABLE', None)
+
+    def tearDown(self):
+        common.get_stream_version = self._original_get_stream_version
 
     def test_with_no_state(self):
         state = {}
@@ -707,6 +725,9 @@ class TestBinlogReplication(unittest.TestCase):
         self.maxDiff = None
         self.state = {}
         self.conn = test_utils.get_test_connection()
+
+        global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
 
         log_file, log_pos = binlog.fetch_current_log_file_and_pos(self.conn)
 
@@ -1250,8 +1271,8 @@ class TestJsonTables(unittest.TestCase):
 
         with connect_with_backoff(self.conn) as open_conn:
             with open_conn.cursor() as cursor:
-                cursor.execute('CREATE TABLE json_table (val json)')
-                cursor.execute('INSERT INTO json_table (val) VALUES ( \'{"a": 10, "b": "c"}\')')
+                cursor.execute('CREATE TABLE json_tab (val json)')
+                cursor.execute('INSERT INTO json_tab (val) VALUES ( \'{"a": 10, "b": "c"}\')')
 
         self.catalog = test_utils.discover_catalog(self.conn, {})
         for stream in self.catalog.streams:

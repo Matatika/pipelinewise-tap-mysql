@@ -58,28 +58,31 @@ BINARY_TYPES = {'binary', 'varbinary'}
 
 SPATIAL_TYPES = {'geometry', 'point', 'linestring',
                  'polygon', 'multipoint', 'multilinestring',
-                 'multipolygon', 'geometrycollection',
-                 'geomcollection'}  # MySQL 8.0+ alias for geometrycollection
+                 'multipolygon', 'geometrycollection'}
+
+# MySQL 8.0+ uses 'geomcollection' as the internal name for GEOMETRYCOLLECTION.
+_DATA_TYPE_ALIASES = {'geomcollection': 'geometrycollection'}
 
 _INTEGER_DISPLAY_WIDTH_RE = re.compile(r'^(tinyint|smallint|mediumint|int|bigint|year)\((\d+)\)(.*)')
 
 
-def _normalize_column_type(col: 'Column') -> str:
-    """Return a normalized sql-datatype string, stripping integer display widths.
+def _normalize_data_type(data_type: str) -> str:
+    """Normalize data_type aliases introduced by newer MySQL versions."""
+    return _DATA_TYPE_ALIASES.get(data_type, data_type)
 
-    MySQL 8.0.17+ removed default display widths (e.g. bigint(20) -> bigint) and also strips
-    the width from TINYINT(1) UNSIGNED -> tinyint unsigned. MariaDB still reports all widths.
-    This normalizes both engines to the same canonical form:
-    - tinyint(1) unsigned is always tinyint(1) unsigned (reconstructed via numeric_precision when needed)
-    - all other integer/year display widths are stripped
+
+def _normalize_column_type(col: 'Column') -> str:
+    """Return a normalized sql-datatype string for consistent cross-version output.
+
+    - Normalizes geomcollection -> geometrycollection (MySQL 8.0+ internal rename)
+    - Strips default integer/year display widths (MySQL 8.0.17+ removed them; MariaDB still reports them)
+    - Preserves tinyint(1) unsigned as-is (canonical boolean+unsigned form)
     """
     column_type = col.column_type.lower()
-    data_type = col.data_type.lower()
 
-    # MySQL 8.0+ strips (1) from TINYINT(1) UNSIGNED -> 'tinyint unsigned'.
-    # Reconstruct the canonical form using numeric_precision.
-    if data_type == 'tinyint' and col.numeric_precision == 1 and 'unsigned' in column_type:
-        return 'tinyint(1) unsigned'
+    # Normalize geometry type aliases (e.g. geomcollection -> geometrycollection)
+    if column_type in _DATA_TYPE_ALIASES:
+        return _DATA_TYPE_ALIASES[column_type]
 
     m = _INTEGER_DISPLAY_WIDTH_RE.match(column_type)
     if m:
@@ -145,7 +148,7 @@ def should_run_discovery(column_names: Set[str], md_map: Dict[Tuple, Dict]) -> b
             LOGGER.debug('Will run discovery because `%s` not in stream metadata', column_name)
             return True
 
-        if md_properties['selected-by-default'] and is_supported_column_type(md_properties['datatype']):
+        if md_properties.get('selected-by-default') and is_supported_column_type(md_properties.get('datatype', '')):
             LOGGER.debug('Will run discovery because `%s` is selected by default and of supported type', column_name)
             return True
 
@@ -248,7 +251,7 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
                                             is_view)
 
                 def column_is_key_prop(c, s):
-                    return (c.column_key == 'PRI' and s.properties[c.column_name].inclusion != 'unsupported')
+                    return c.column_key == 'PRI' and s.properties[c.column_name].inclusion != 'unsupported'
 
                 key_properties = [c.column_name for c in cols if column_is_key_prop(c, schema)]
 
@@ -273,7 +276,7 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
 def schema_for_column(column):  # pylint: disable=too-many-branches
     """Returns the Schema object for the given Column."""
 
-    data_type = column.data_type.lower()
+    data_type = _normalize_data_type(column.data_type.lower())
     column_type = column.column_type.lower()
 
     inclusion = 'available'
@@ -283,9 +286,7 @@ def schema_for_column(column):  # pylint: disable=too-many-branches
 
     result = Schema(inclusion=inclusion)
 
-    is_tinyint1 = column_type.startswith('tinyint(1)') or \
-        (data_type == 'tinyint' and column.numeric_precision == 1)
-    if data_type in BOOL_TYPES or is_tinyint1:
+    if data_type in BOOL_TYPES or column_type.startswith('tinyint(1)'):
         result.type = ['null', 'boolean']
 
     elif data_type in BYTES_FOR_INTEGER_TYPE:
@@ -350,7 +351,7 @@ def create_column_metadata(cols: List[Column]):
 
         mdata = metadata.write(mdata,
                                ('properties', col.column_name),
-                               'datatype', col.data_type.lower()
+                               'datatype', _normalize_data_type(col.data_type.lower())
                                )
 
     return metadata.to_list(mdata)
