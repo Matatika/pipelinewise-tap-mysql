@@ -2,8 +2,8 @@
 import copy
 from decimal import Decimal
 
+import mysql.connector.errors
 import orjson
-import pymysql
 import singer
 import singer.messages as _singer_messages
 from singer import get_logger, metadata, metrics
@@ -427,7 +427,7 @@ def log_server_params(mysql_conn):
                     'Server SSL Parameters(blank means SSL is not active): [ssl_version: %s], [ssl_cipher: %s]',
                     mapped_row['Ssl_version'], mapped_row['Ssl_cipher'])
 
-        except pymysql.err.InternalError as exc:
+        except mysql.connector.errors.InternalError as exc:
             LOGGER.warning("Encountered error checking server params. Error: (%s) %s", *exc.args)
 
 
