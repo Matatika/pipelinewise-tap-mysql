@@ -7,7 +7,7 @@ import time
 import singer
 from singer import metadata, metrics, utils
 
-from tap_mysql.stream_utils import get_key_properties
+from tap_mysql.stream_utils import get_key_properties, write_message
 
 LOGGER = singer.get_logger('tap_mysql')
 
@@ -170,7 +170,7 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       row,
                                                       columns,
                                                       time_extracted)
-                singer.write_message(record_message)
+                write_message(record_message)
 
                 md_map = metadata.to_map(catalog_entry.metadata)
                 stream_metadata = md_map.get((), {})
@@ -205,6 +205,6 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       record_message.record[replication_key])
 
                 if rows_saved % 1000 == 0:
-                    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+                    write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
-    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+    write_message(singer.StateMessage(value=copy.deepcopy(state)))

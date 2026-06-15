@@ -26,7 +26,7 @@ from singer import Schema, metadata, utils
 from tap_mysql import connection
 from tap_mysql.connection import MySQLConnection, connect_with_backoff, make_connection_wrapper
 from tap_mysql.discover_utils import desired_columns, discover_catalog, should_run_discovery
-from tap_mysql.stream_utils import write_schema_message
+from tap_mysql.stream_utils import write_message, write_schema_message
 from tap_mysql.sync_strategies import common
 
 LOGGER = singer.get_logger('tap_mysql')
@@ -500,7 +500,7 @@ def handle_write_rows_event(event, catalog_entry, state, columns, rows_saved, ti
                                               filtered_vals,
                                               time_extracted)
 
-        singer.write_message(record_message)
+        write_message(record_message)
         rows_saved += 1
 
     return rows_saved
@@ -520,7 +520,7 @@ def handle_update_rows_event(event, catalog_entry, state, columns, rows_saved, t
                                               filtered_vals,
                                               time_extracted)
 
-        singer.write_message(record_message)
+        write_message(record_message)
 
         rows_saved += 1
 
@@ -546,7 +546,7 @@ def handle_delete_rows_event(event, catalog_entry, state, columns, rows_saved, t
                                               filtered_vals,
                                               time_extracted)
 
-        singer.write_message(record_message)
+        write_message(record_message)
 
         rows_saved += 1
 
@@ -786,7 +786,7 @@ def _run_binlog_sync(
                                      log_pos,
                                      gtid_pos
                                      )
-            singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+            write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
     LOGGER.info('Processed %s rows', processed_rows_events)
 
@@ -913,4 +913,4 @@ def sync_binlog_stream(
         if reader:
             reader.close()
 
-    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+    write_message(singer.StateMessage(value=copy.deepcopy(state)))

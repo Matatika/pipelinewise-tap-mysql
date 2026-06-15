@@ -8,6 +8,7 @@ import singer.metadata
 
 import tap_mysql
 import tap_mysql.discover_utils
+import tap_mysql.stream_utils
 from tap_mysql.connection import MARIADB_ENGINE, MYSQL_ENGINE, MySQLConnection, connect_with_backoff
 
 try:
@@ -27,7 +28,7 @@ def accumulate_singer_messages(message):
     SINGER_MESSAGES.append(message)
 
 
-singer.write_message = accumulate_singer_messages
+tap_mysql.stream_utils.write_message = accumulate_singer_messages
 
 
 class TestTypeMapping(unittest.TestCase):

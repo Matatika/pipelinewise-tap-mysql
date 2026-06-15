@@ -3,6 +3,7 @@ import unittest
 import singer
 
 import tap_mysql
+import tap_mysql.stream_utils
 from tap_mysql.connection import connect_with_backoff
 
 try:
@@ -83,7 +84,7 @@ def init_tables(conn):
 
 class BinlogInterruption(unittest.TestCase):
     def setUp(self):
-        self._original_write_message = singer.write_message
+        self._original_write_message = tap_mysql.stream_utils.write_message
         self.conn = test_utils.get_test_connection()
         self.catalog = init_tables(self.conn)
 
@@ -112,11 +113,11 @@ class BinlogInterruption(unittest.TestCase):
         SINGER_MESSAGES.clear()
 
     def tearDown(self):
-        singer.write_message = self._original_write_message
+        tap_mysql.stream_utils.write_message = self._original_write_message
         SINGER_MESSAGES.clear()
 
     def test_table_2_interrupted(self):
-        singer.write_message = singer_write_message_no_table_2
+        tap_mysql.stream_utils.write_message = singer_write_message_no_table_2
 
         state = {}
         failed_syncing_table_2 = False
@@ -158,7 +159,7 @@ class BinlogInterruption(unittest.TestCase):
         self.assertIsNotNone(table_2_bookmark.get('log_pos'))
 
         failed_syncing_table_2 = False
-        singer.write_message = singer_write_message_ok
+        tap_mysql.stream_utils.write_message = singer_write_message_ok
 
         SINGER_MESSAGES.clear()
 
@@ -232,7 +233,7 @@ class BinlogInterruption(unittest.TestCase):
 
 class FullTableInterruption(unittest.TestCase):
     def setUp(self):
-        self._original_write_message = singer.write_message
+        self._original_write_message = tap_mysql.stream_utils.write_message
         self.conn = test_utils.get_test_connection()
         self.catalog = init_tables(self.conn)
 
@@ -257,11 +258,11 @@ class FullTableInterruption(unittest.TestCase):
         SINGER_MESSAGES.clear()
 
     def tearDown(self):
-        singer.write_message = self._original_write_message
+        tap_mysql.stream_utils.write_message = self._original_write_message
         SINGER_MESSAGES.clear()
 
     def test_table_2_interrupted(self):
-        singer.write_message = singer_write_message_no_table_2
+        tap_mysql.stream_utils.write_message = singer_write_message_no_table_2
 
         state = {}
         failed_syncing_table_2 = False
@@ -285,7 +286,7 @@ class FullTableInterruption(unittest.TestCase):
                           ])
 
         failed_syncing_table_2 = False
-        singer.write_message = singer_write_message_ok
+        tap_mysql.stream_utils.write_message = singer_write_message_ok
 
         SINGER_MESSAGES.clear()
 
