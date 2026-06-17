@@ -101,6 +101,7 @@ class MySQLConnection:
             'charset': 'utf8',
             'connection_timeout': CONNECT_TIMEOUT_SECONDS,
             'autocommit': True,
+            'compress': True,
         }
 
         if config.get('database'):
