@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # pylint: disable=too-many-locals,missing-function-docstring
 
+import time
+
+import mysql.connector.errors
 import singer
 from singer import metadata
 
 from tap_mysql import stream_utils
 from tap_mysql.connection import connect_with_backoff
 from tap_mysql.sync_strategies import binlog, common
+
+MAX_SYNC_RETRIES = 5
 
 LOGGER = singer.get_logger('tap_mysql')
 
@@ -137,38 +142,55 @@ def sync_table(mysql_conn, catalog_entry, state, columns, stream_version):
 
     key_props_are_auto_incrementing = pks_are_auto_incrementing(mysql_conn, catalog_entry)
 
-    with connect_with_backoff(mysql_conn) as open_conn:
-        with open_conn.cursor() as cur:
-            select_sql = common.generate_select_sql(catalog_entry, columns)
+    last_error = None
+    for attempt in range(MAX_SYNC_RETRIES):
+        if attempt > 0:
+            wait = 2 ** attempt
+            LOGGER.warning(
+                "Lost connection to MySQL during sync of %s (attempt %d/%d), reconnecting in %ds: %s",
+                catalog_entry.table, attempt, MAX_SYNC_RETRIES, wait, last_error,
+            )
+            time.sleep(wait)
 
-            if key_props_are_auto_incrementing:
-                LOGGER.info("Detected auto-incrementing primary key(s) - will replicate incrementally")
-                max_pk_values = singer.get_bookmark(state,
-                                                    catalog_entry.tap_stream_id,
-                                                    'max_pk_values') or get_max_pk_values(cur, catalog_entry)
+        try:
+            with connect_with_backoff(mysql_conn) as open_conn:
+                with open_conn.cursor() as cur:
+                    select_sql = common.generate_select_sql(catalog_entry, columns)
 
-                if not max_pk_values:
-                    LOGGER.info("No max value for auto-incrementing PK found for table %s", catalog_entry.table)
-                else:
-                    state = singer.write_bookmark(state,
-                                                  catalog_entry.tap_stream_id,
-                                                  'max_pk_values',
-                                                  max_pk_values)
+                    if key_props_are_auto_incrementing:
+                        if attempt == 0:
+                            LOGGER.info("Detected auto-incrementing primary key(s) - will replicate incrementally")
+                        max_pk_values = singer.get_bookmark(state,
+                                                            catalog_entry.tap_stream_id,
+                                                            'max_pk_values') or get_max_pk_values(cur, catalog_entry)
 
-                    pk_clause = generate_pk_clause(catalog_entry, state)
+                        if not max_pk_values:
+                            LOGGER.info("No max value for auto-incrementing PK found for table %s", catalog_entry.table)
+                        else:
+                            state = singer.write_bookmark(state,
+                                                          catalog_entry.tap_stream_id,
+                                                          'max_pk_values',
+                                                          max_pk_values)
 
-                    select_sql += pk_clause
+                            pk_clause = generate_pk_clause(catalog_entry, state)
 
-            params = {}
+                            select_sql += pk_clause
 
-            # pylint:disable=duplicate-code
-            common.sync_query(cur,
-                              catalog_entry,
-                              state,
-                              select_sql,
-                              columns,
-                              stream_version,
-                              params)
+                    params = {}
+
+                    # pylint:disable=duplicate-code
+                    common.sync_query(cur,
+                                      catalog_entry,
+                                      state,
+                                      select_sql,
+                                      columns,
+                                      stream_version,
+                                      params)
+            break
+        except mysql.connector.errors.OperationalError as e:
+            last_error = e
+            if attempt == MAX_SYNC_RETRIES - 1:
+                raise
 
     # clear max pk value and last pk fetched upon successful sync
     singer.clear_bookmark(state, catalog_entry.tap_stream_id, 'max_pk_values')
