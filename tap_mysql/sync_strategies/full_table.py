@@ -159,6 +159,16 @@ def sync_table(mysql_conn, catalog_entry, state, columns, stream_version):
         with open_conn.cursor() as cur:
             select_sql = common.generate_select_sql(catalog_entry, columns)
 
+            # Diagnostic: log the table's actual PK range (index-only MIN/MAX) to help
+            # size shard boundaries. Enable per stream via metadata `log-pk-range: true`.
+            if stream_metadata.get('log-pk-range') and len(key_properties) == 1:
+                pk_col = common.escape(key_properties[0])
+                db_name = common.escape(common.get_database_name(catalog_entry))
+                tbl_name = common.escape(catalog_entry.table)
+                cur.execute(f"SELECT MIN({pk_col}), MAX({pk_col}) FROM {db_name}.{tbl_name}")
+                pk_min, pk_max = cur.fetchone()
+                LOGGER.info("PK range for %s: min=%s max=%s", catalog_entry.tap_stream_id, pk_min, pk_max)
+
             if key_props_are_auto_incrementing:
                 LOGGER.info("Detected auto-incrementing primary key(s) - will replicate incrementally")
                 if shard_max is not None:
