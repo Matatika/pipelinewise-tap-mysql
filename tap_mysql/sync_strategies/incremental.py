@@ -3,7 +3,9 @@
 
 import datetime
 import sys
+import time
 
+import mysql.connector.errors
 import singer
 from singer import metadata
 
@@ -11,10 +13,14 @@ from tap_mysql import stream_utils
 from tap_mysql.connection import connect_with_backoff
 from tap_mysql.sync_strategies import common
 
+MAX_SYNC_RETRIES = 5
+
 if sys.version_info < (3, 11):
     from backports.datetime_fromisoformat import MonkeyPatch
 
     MonkeyPatch.patch_fromisoformat()
+
+LOGGER = singer.get_logger('tap_mysql')
 
 BOOKMARK_KEYS = {'replication_key', 'replication_key_value', 'version'}
 
@@ -56,26 +62,46 @@ def sync_table(mysql_conn, catalog_entry, state, columns):
 
     stream_utils.write_message(activate_version_message)
 
-    with connect_with_backoff(mysql_conn) as open_conn:
-        with open_conn.cursor() as cur:
-            select_sql = common.generate_select_sql(catalog_entry, columns)
-            params = {}
+    last_error = None
+    for attempt in range(MAX_SYNC_RETRIES):
+        if attempt > 0:
+            replication_key_value = singer.get_bookmark(state,
+                                                        catalog_entry.tap_stream_id,
+                                                        'replication_key_value')
+            wait = 2 ** attempt
+            LOGGER.warning(
+                "Lost connection to MySQL during sync of %s (attempt %d/%d), reconnecting in %ds: %s",
+                catalog_entry.table, attempt, MAX_SYNC_RETRIES, wait, last_error,
+            )
+            time.sleep(wait)
 
-            if replication_key_value is not None:
-                if catalog_entry.schema.properties[replication_key_metadata].format == 'date-time':
-                    replication_key_value = datetime.datetime.fromisoformat(replication_key_value)
+        try:
+            with connect_with_backoff(mysql_conn) as open_conn:
+                with open_conn.cursor() as cur:
+                    select_sql = common.generate_select_sql(catalog_entry, columns)
+                    params = {}
 
-                select_sql += f" WHERE `{replication_key_metadata}` >= %(replication_key_value)s " \
-                              f"ORDER BY `{replication_key_metadata}` ASC"
+                    if replication_key_value is not None:
+                        if catalog_entry.schema.properties[replication_key_metadata].format == 'date-time' \
+                                and isinstance(replication_key_value, str):
+                            replication_key_value = datetime.datetime.fromisoformat(replication_key_value)
 
-                params['replication_key_value'] = replication_key_value
-            elif replication_key_metadata is not None:
-                select_sql += f' ORDER BY `{replication_key_metadata}` ASC'
+                        select_sql += f" WHERE `{replication_key_metadata}` >= %(replication_key_value)s " \
+                                      f"ORDER BY `{replication_key_metadata}` ASC"
 
-            common.sync_query(cur,
-                              catalog_entry,
-                              state,
-                              select_sql,
-                              columns,
-                              stream_version,
-                              params)
+                        params['replication_key_value'] = replication_key_value
+                    elif replication_key_metadata is not None:
+                        select_sql += f' ORDER BY `{replication_key_metadata}` ASC'
+
+                    common.sync_query(cur,
+                                      catalog_entry,
+                                      state,
+                                      select_sql,
+                                      columns,
+                                      stream_version,
+                                      params)
+            break
+        except mysql.connector.errors.OperationalError as e:
+            last_error = e
+            if attempt == MAX_SYNC_RETRIES - 1:
+                raise
