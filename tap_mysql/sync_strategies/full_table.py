@@ -87,7 +87,7 @@ def get_max_pk_values(cursor, catalog_entry):
     return max_pk_values
 
 
-def generate_pk_clause(catalog_entry, state):
+def generate_pk_clause(catalog_entry, state, min_pk_values=None):
     key_properties = common.get_key_properties(catalog_entry)
     escaped_columns = [common.escape(c) for c in key_properties]
 
@@ -99,9 +99,13 @@ def generate_pk_clause(catalog_entry, state):
                                           catalog_entry.tap_stream_id,
                                           'last_pk_fetched')
 
-    if last_pk_fetched:
+    # Exclusive lower bound: a resume point (last_pk_fetched) takes precedence so
+    # restarts work, otherwise fall back to the configured shard floor (min_pk_values).
+    lower_bound = last_pk_fetched or min_pk_values
+
+    if lower_bound:
         pk_comparisons = [
-            f"({common.escape(pk)} > {last_pk_fetched[pk]} AND {common.escape(pk)} <= {max_pk_values[pk]})"
+            f"({common.escape(pk)} > {lower_bound[pk]} AND {common.escape(pk)} <= {max_pk_values[pk]})"
             for pk in key_properties]
     else:
         pk_comparisons = [f"{common.escape(pk)} <= {max_pk_values[pk]}" for pk in key_properties]
@@ -137,15 +141,33 @@ def sync_table(mysql_conn, catalog_entry, state, columns, stream_version):
 
     key_props_are_auto_incrementing = pks_are_auto_incrementing(mysql_conn, catalog_entry)
 
+    # Optional primary-key range bounds for parallel sharding. Set per stream via
+    # metadata `min-pk-value` / `max-pk-value`; each shard then extracts the slice
+    # (min-pk-value, max-pk-value]. Single-PK tables only; ignored otherwise.
+    md_map = metadata.to_map(catalog_entry.metadata)
+    stream_metadata = md_map.get((), {})
+    key_properties = common.get_key_properties(catalog_entry)
+    shard_min = stream_metadata.get('min-pk-value')
+    shard_max = stream_metadata.get('max-pk-value')
+    if (shard_min is not None or shard_max is not None) and len(key_properties) != 1:
+        LOGGER.warning("Ignoring min-pk-value/max-pk-value for %s: only single-PK streams are supported",
+                       catalog_entry.tap_stream_id)
+        shard_min = shard_max = None
+    min_pk_values = {key_properties[0]: shard_min} if shard_min is not None else None
+
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
             select_sql = common.generate_select_sql(catalog_entry, columns)
 
             if key_props_are_auto_incrementing:
                 LOGGER.info("Detected auto-incrementing primary key(s) - will replicate incrementally")
-                max_pk_values = singer.get_bookmark(state,
-                                                    catalog_entry.tap_stream_id,
-                                                    'max_pk_values') or get_max_pk_values(cur, catalog_entry)
+                if shard_max is not None:
+                    # Cap the upper bound to this shard's ceiling instead of the table max.
+                    max_pk_values = {key_properties[0]: shard_max}
+                else:
+                    max_pk_values = singer.get_bookmark(state,
+                                                        catalog_entry.tap_stream_id,
+                                                        'max_pk_values') or get_max_pk_values(cur, catalog_entry)
 
                 if not max_pk_values:
                     LOGGER.info("No max value for auto-incrementing PK found for table %s", catalog_entry.table)
@@ -155,9 +177,11 @@ def sync_table(mysql_conn, catalog_entry, state, columns, stream_version):
                                                   'max_pk_values',
                                                   max_pk_values)
 
-                    pk_clause = generate_pk_clause(catalog_entry, state)
+                    pk_clause = generate_pk_clause(catalog_entry, state, min_pk_values=min_pk_values)
 
                     select_sql += pk_clause
+                    LOGGER.info("Shard PK bounds for %s: (%s, %s]",
+                                catalog_entry.tap_stream_id, shard_min, max_pk_values[key_properties[0]])
 
             params = {}
 
