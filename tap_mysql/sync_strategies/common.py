@@ -2,8 +2,13 @@
 # pylint: disable=missing-function-docstring,too-many-arguments,too-many-locals
 import copy
 import datetime
+import gzip
+import os
+import sys
 import time
+import uuid
 
+import orjson
 import singer
 from singer import metadata, metrics, utils
 
@@ -140,7 +145,23 @@ def whitelist_bookmark_keys(bookmark_key_set, tap_stream_id, state):
 FETCH_BATCH_SIZE = 1000
 
 
-def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params):
+def _write_batch_file(stream_name, records, batch_root='.'):
+    path = os.path.join(batch_root, f'tap-mysql-{uuid.uuid4().hex}.jsonl.gz')
+    with gzip.open(path, 'wb') as gz:
+        for rec in records:
+            gz.write(orjson.dumps(rec) + b'\n')
+    msg = {
+        'type': 'BATCH',
+        'stream': stream_name,
+        'encoding': {'format': 'jsonl', 'compression': 'gzip'},
+        'manifest': [f'file://{path}'],
+    }
+    sys.stdout.write(orjson.dumps(msg).decode() + '\n')
+    sys.stdout.flush()
+
+
+def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params,
+               batch_size=None, batch_root='.'):
     replication_key = singer.get_bookmark(state,
                                           catalog_entry.tap_stream_id,
                                           'replication_key')
@@ -160,6 +181,8 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
     replication_method = stream_metadata.get('replication-method')
     key_properties = get_key_properties(catalog_entry) if replication_method in {'FULL_TABLE', 'LOG_BASED'} else []
 
+    batch_buffer = [] if batch_size else None
+
     with metrics.record_counter(None) as counter:
         counter.tags['database'] = database_name
         counter.tags['table'] = catalog_entry.table
@@ -177,7 +200,6 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       row,
                                                       columns,
                                                       time_extracted_str)
-                stream_utils.write_message(record_message)
 
                 if replication_method in {'FULL_TABLE', 'LOG_BASED'}:
                     max_pk_values = singer.get_bookmark(state,
@@ -205,7 +227,18 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       'replication_key_value',
                                                       record_message.record[replication_key])
 
-                if rows_saved % 1000 == 0:
-                    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+                if batch_size:
+                    batch_buffer.append(record_message.record)
+                    if len(batch_buffer) >= batch_size:
+                        _write_batch_file(catalog_entry.stream, batch_buffer, batch_root)
+                        batch_buffer.clear()
+                        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+                else:
+                    stream_utils.write_message(record_message)
+                    if rows_saved % 1000 == 0:
+                        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+
+    if batch_size and batch_buffer:
+        _write_batch_file(catalog_entry.stream, batch_buffer, batch_root)
 
     stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
