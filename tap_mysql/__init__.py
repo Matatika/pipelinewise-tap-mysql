@@ -11,6 +11,7 @@ from tap_mysql.connection import MYSQL_ENGINE, MySQLConnection, connect_with_bac
 from tap_mysql.discover_utils import discover_catalog, resolve_catalog
 from tap_mysql.stream_utils import write_schema_message
 from tap_mysql.sync_strategies import binlog, common, full_table, incremental
+from tap_mysql.sync_strategies.common import BatchConfig
 
 LOGGER = get_logger('tap_mysql')
 
@@ -181,7 +182,7 @@ def get_binlog_streams(mysql_conn, catalog, config, state):
     return resolve_catalog(discovered, binlog_streams)
 
 
-def do_sync_incremental(mysql_conn, catalog_entry, state, columns, batch_size=None, batch_root='.'):
+def do_sync_incremental(mysql_conn, catalog_entry, state, columns, batch_config=None):
     LOGGER.info("Stream %s is using incremental replication", catalog_entry.stream)
 
     md_map = metadata.to_map(catalog_entry.metadata)
@@ -195,14 +196,14 @@ def do_sync_incremental(mysql_conn, catalog_entry, state, columns, batch_size=No
                          bookmark_properties=[replication_key])
 
     incremental.sync_table(mysql_conn, catalog_entry, state, columns,
-                           batch_size=batch_size, batch_root=batch_root)
+                           batch_config=batch_config)
 
     stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
 
 # pylint: disable=too-many-arguments
 def do_sync_historical_binlog(mysql_conn, catalog_entry, state, columns, use_gtid: bool, engine: str,
-                               batch_size=None, batch_root='.'):
+                               batch_config=None):
     binlog.verify_binlog_config(mysql_conn)
 
     if use_gtid and engine == MYSQL_ENGINE:
@@ -238,7 +239,7 @@ def do_sync_historical_binlog(mysql_conn, catalog_entry, state, columns, use_gti
     if max_pk_values and ((use_gtid and gtid) or (log_file and log_pos)):
         LOGGER.info("Resuming initial full table sync for LOG_BASED stream %s", catalog_entry.tap_stream_id)
         full_table.sync_table(mysql_conn, catalog_entry, state, columns, stream_version,
-                              batch_size=batch_size, batch_root=batch_root)
+                              batch_config=batch_config)
     else:
         LOGGER.info("Performing initial full table sync for LOG_BASED stream %s", catalog_entry.tap_stream_id)
 
@@ -278,11 +279,11 @@ def do_sync_historical_binlog(mysql_conn, catalog_entry, state, columns, use_gti
                                               current_gtid)
 
             full_table.sync_table(mysql_conn, catalog_entry, state, columns, stream_version,
-                                  batch_size=batch_size, batch_root=batch_root)
+                                  batch_config=batch_config)
 
         else:
             full_table.sync_table(mysql_conn, catalog_entry, state, columns, stream_version,
-                                  batch_size=batch_size, batch_root=batch_root)
+                                  batch_config=batch_config)
             state = singer.write_bookmark(state,
                                           catalog_entry.tap_stream_id,
                                           'log_file',
@@ -300,7 +301,7 @@ def do_sync_historical_binlog(mysql_conn, catalog_entry, state, columns, use_gti
                                               current_gtid)
 
 
-def do_sync_full_table(mysql_conn, catalog_entry, state, columns, batch_size=None, batch_root='.'):
+def do_sync_full_table(mysql_conn, catalog_entry, state, columns, batch_config=None):
     LOGGER.info("Stream %s is using full table replication", catalog_entry.stream)
 
     write_schema_message(catalog_entry)
@@ -308,7 +309,7 @@ def do_sync_full_table(mysql_conn, catalog_entry, state, columns, batch_size=Non
     stream_version = common.get_stream_version(catalog_entry.tap_stream_id, state)
 
     full_table.sync_table(mysql_conn, catalog_entry, state, columns, stream_version,
-                          batch_size=batch_size, batch_root=batch_root)
+                          batch_config=batch_config)
 
     # Prefer initial_full_table_complete going forward
     singer.clear_bookmark(state, catalog_entry.tap_stream_id, 'version')
@@ -321,7 +322,7 @@ def do_sync_full_table(mysql_conn, catalog_entry, state, columns, batch_size=Non
     stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
 
-def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, engine, batch_size=None, batch_root='.'):
+def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, engine, batch_config=None):
     for catalog_entry in non_binlog_catalog.streams:
         columns = list(catalog_entry.schema.properties.keys())
 
@@ -348,13 +349,13 @@ def sync_non_binlog_streams(mysql_conn, non_binlog_catalog, state, use_gtid, eng
 
             if replication_method == 'INCREMENTAL':
                 do_sync_incremental(mysql_conn, catalog_entry, state, columns,
-                                    batch_size=batch_size, batch_root=batch_root)
+                                    batch_config=batch_config)
             elif replication_method == 'LOG_BASED':
                 do_sync_historical_binlog(mysql_conn, catalog_entry, state, columns, use_gtid, engine,
-                                          batch_size=batch_size, batch_root=batch_root)
+                                          batch_config=batch_config)
             elif replication_method == 'FULL_TABLE':
                 do_sync_full_table(mysql_conn, catalog_entry, state, columns,
-                                   batch_size=batch_size, batch_root=batch_root)
+                                   batch_config=batch_config)
             else:
                 raise Exception("only INCREMENTAL, LOG_BASED, and FULL TABLE replication methods are supported")
 
@@ -381,16 +382,14 @@ def do_sync(mysql_conn, config, catalog, state):
     non_binlog_catalog = get_non_binlog_streams(mysql_conn, catalog, config, state)
     binlog_catalog = get_binlog_streams(mysql_conn, catalog, config, state)
 
-    batch_size = config.get('batch_size_rows') or None
-    batch_root = config.get('batch_root', '.')
+    batch_config = BatchConfig.from_config(config)
 
     sync_non_binlog_streams(mysql_conn,
                             non_binlog_catalog,
                             state,
                             config['use_gtid'],
                             config['engine'],
-                            batch_size=batch_size,
-                            batch_root=batch_root,
+                            batch_config=batch_config,
                             )
     sync_binlog_streams(mysql_conn, binlog_catalog, config, state)
 
