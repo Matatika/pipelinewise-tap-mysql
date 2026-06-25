@@ -145,13 +145,16 @@ def whitelist_bookmark_keys(bookmark_key_set, tap_stream_id, state):
 FETCH_BATCH_SIZE = 1000
 
 
-def _write_batch_file(stream_name, records, batch_root='.'):
+def _open_batch_file(batch_root='.'):
     path = os.path.join(batch_root, f'tap-mysql-{uuid.uuid4().hex}.jsonl.gz')
-    with gzip.open(path, 'wb') as gz:
-        for rec in records:
-            gz.write(orjson.dumps(rec) + b'\n')
+    gz = gzip.open(path, 'wb')
+    return path, gz
+
+
+def _close_batch_file(stream_name, path, gz, row_count):
+    gz.close()
     size_bytes = os.path.getsize(path)
-    LOGGER.info('Wrote batch file: %s (%d rows, %d bytes)', path, len(records), size_bytes)
+    LOGGER.info('Wrote batch file: %s (%d rows, %d bytes)', path, row_count, size_bytes)
     msg = {
         'type': 'BATCH',
         'stream': stream_name,
@@ -183,7 +186,8 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
     replication_method = stream_metadata.get('replication-method')
     key_properties = get_key_properties(catalog_entry) if replication_method in {'FULL_TABLE', 'LOG_BASED'} else []
 
-    batch_buffer = [] if batch_size else None
+    batch_path = batch_gz = None
+    batch_row_count = 0
 
     with metrics.record_counter(None) as counter:
         counter.tags['database'] = database_name
@@ -230,17 +234,21 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       record_message.record[replication_key])
 
                 if batch_size:
-                    batch_buffer.append(record_message.record)
-                    if len(batch_buffer) >= batch_size:
-                        _write_batch_file(catalog_entry.stream, batch_buffer, batch_root)
-                        batch_buffer.clear()
+                    if batch_gz is None:
+                        batch_path, batch_gz = _open_batch_file(batch_root)
+                    batch_gz.write(orjson.dumps(record_message.record) + b'\n')
+                    batch_row_count += 1
+                    if batch_row_count >= batch_size:
+                        _close_batch_file(catalog_entry.stream, batch_path, batch_gz, batch_row_count)
+                        batch_path = batch_gz = None
+                        batch_row_count = 0
                         stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
                 else:
                     stream_utils.write_message(record_message)
                     if rows_saved % 1000 == 0:
                         stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
-    if batch_size and batch_buffer:
-        _write_batch_file(catalog_entry.stream, batch_buffer, batch_root)
+    if batch_size and batch_gz is not None:
+        _close_batch_file(catalog_entry.stream, batch_path, batch_gz, batch_row_count)
 
     stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
