@@ -150,6 +150,8 @@ def _write_batch_file(stream_name, records, batch_root='.'):
     with gzip.open(path, 'wb') as gz:
         for rec in records:
             gz.write(orjson.dumps(rec) + b'\n')
+    size_bytes = os.path.getsize(path)
+    LOGGER.info('Wrote batch file: %s (%d rows, %d bytes)', path, len(records), size_bytes)
     msg = {
         'type': 'BATCH',
         'stream': stream_name,
