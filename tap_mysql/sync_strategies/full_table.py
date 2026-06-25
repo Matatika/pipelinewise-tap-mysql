@@ -116,7 +116,7 @@ def generate_pk_clause(catalog_entry, state):
     return sql
 
 
-def sync_table(mysql_conn, catalog_entry, state, columns, stream_version):
+def sync_table(mysql_conn, catalog_entry, state, columns, stream_version, batch_config=None):
     common.whitelist_bookmark_keys(generate_bookmark_keys(catalog_entry), catalog_entry.tap_stream_id, state)
 
     bookmark = state.get('bookmarks', {}).get(catalog_entry.tap_stream_id, {})
@@ -185,7 +185,8 @@ def sync_table(mysql_conn, catalog_entry, state, columns, stream_version):
                                       select_sql,
                                       columns,
                                       stream_version,
-                                      params)
+                                      params,
+                                      batch_config=batch_config)
             break
         except mysql.connector.errors.OperationalError as e:
             last_error = e

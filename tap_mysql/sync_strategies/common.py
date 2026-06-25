@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 # pylint: disable=missing-function-docstring,too-many-arguments,too-many-locals
 import copy
+import dataclasses
 import datetime
+import gzip
+import os
+import sys
 import time
+import uuid
+from typing import Optional
 
+import orjson
 import singer
 from singer import metadata, metrics, utils
 
@@ -140,7 +147,97 @@ def whitelist_bookmark_keys(bookmark_key_set, tap_stream_id, state):
 FETCH_BATCH_SIZE = 1000
 
 
-def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params):
+@dataclasses.dataclass(frozen=True)
+class BatchConfig:
+    """Validated configuration for Singer BATCH message mode.
+
+    Constructing an instance validates that *batch_root_dir* exists.  A value
+    of ``None`` from callers means BATCH mode is disabled — use
+    ``BatchConfig.from_config`` to build one from a Singer config dict.
+    """
+
+    batch_size: int
+    batch_root_dir: str = '.'
+
+    def __post_init__(self):
+        if self.batch_size <= 0:
+            raise ValueError(f'batch_size must be a positive integer, got {self.batch_size}')
+        if not os.path.isdir(self.batch_root_dir):
+            raise ValueError(f'batch_root_dir does not exist or is not a directory: {self.batch_root_dir!r}')
+
+    @classmethod
+    def from_config(cls, config: dict) -> 'Optional[BatchConfig]':
+        """Return a BatchConfig if batch_size_rows is set, else None (RECORD mode)."""
+        raw = config.get('batch_size_rows') or None
+        if raw is None:
+            return None
+        return cls(batch_size=int(raw), batch_root_dir=config.get('batch_root_dir', '.'))
+
+
+class BatchWriter:
+    """Writes Singer BATCH messages as streaming JSONL.gz files.
+
+    Each call to `write()` appends one record to the current file.  When
+    `batch_size` rows have been written the file is closed, a BATCH message is
+    emitted to `output`, and the writer resets so the next `write()` starts a
+    fresh file.  Call `flush()` at the end of a query to emit any partial batch.
+
+    Passing `output` (any file-like with `.write`/`.flush`) makes the BATCH
+    message output injectable for unit tests; it defaults to `sys.stdout`.
+    """
+
+    def __init__(self, stream_name: str, batch_config: BatchConfig, output=None):
+        self.stream_name = stream_name
+        self._batch_config = batch_config
+        self._output = output if output is not None else sys.stdout
+        self._path = None
+        self._gz = None
+        self._row_count = 0
+
+    def write(self, record):
+        """Append *record* (a dict) to the current batch file.
+
+        Returns True if this write completed a full batch (i.e. a BATCH message
+        was emitted and the writer has reset), False otherwise.
+        """
+        if self._gz is None:
+            self._path = os.path.join(self._batch_config.batch_root_dir,
+                                      f'tap-mysql-{uuid.uuid4().hex}.jsonl.gz')
+            self._gz = gzip.open(self._path, 'wb')
+        self._gz.write(orjson.dumps(record) + b'\n')
+        self._row_count += 1
+        if self._row_count >= self._batch_config.batch_size:
+            self.flush()
+            return True
+        return False
+
+    def flush(self):
+        """Emit a BATCH message for any buffered rows, then reset.
+
+        No-op when no rows have been written since the last flush.
+        """
+        if self._gz is None:
+            return
+        self._gz.close()
+        assert self._path is not None
+        size_bytes = os.path.getsize(self._path)
+        LOGGER.info('Wrote batch file: %s (%d rows, %d bytes)',
+                    self._path, self._row_count, size_bytes)
+        msg = {
+            'type': 'BATCH',
+            'stream': self.stream_name,
+            'encoding': {'format': 'jsonl', 'compression': 'gzip'},
+            'manifest': [f'file://{self._path}'],
+        }
+        self._output.write(orjson.dumps(msg).decode() + '\n')
+        self._output.flush()
+        self._path = None
+        self._gz = None
+        self._row_count = 0
+
+
+def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params,
+               batch_config: 'Optional[BatchConfig]' = None):
     replication_key = singer.get_bookmark(state,
                                           catalog_entry.tap_stream_id,
                                           'replication_key')
@@ -160,6 +257,8 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
     replication_method = stream_metadata.get('replication-method')
     key_properties = get_key_properties(catalog_entry) if replication_method in {'FULL_TABLE', 'LOG_BASED'} else []
 
+    batch_writer = BatchWriter(catalog_entry.stream, batch_config) if batch_config else None
+
     with metrics.record_counter(None) as counter:
         counter.tags['database'] = database_name
         counter.tags['table'] = catalog_entry.table
@@ -177,7 +276,14 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       row,
                                                       columns,
                                                       time_extracted_str)
-                stream_utils.write_message(record_message)
+
+                # Write before updating bookmarks so that a mid-write exception
+                # does not advance the bookmark past the last successfully emitted record.
+                if batch_writer:
+                    checkpoint = batch_writer.write(record_message.record)
+                else:
+                    stream_utils.write_message(record_message)
+                    checkpoint = (rows_saved % 1000 == 0)
 
                 if replication_method in {'FULL_TABLE', 'LOG_BASED'}:
                     max_pk_values = singer.get_bookmark(state,
@@ -205,7 +311,10 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       'replication_key_value',
                                                       record_message.record[replication_key])
 
-                if rows_saved % 1000 == 0:
+                if checkpoint:
                     stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+
+    if batch_writer:
+        batch_writer.flush()
 
     stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
