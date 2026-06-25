@@ -277,6 +277,14 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       columns,
                                                       time_extracted_str)
 
+                # Write before updating bookmarks so that a mid-write exception
+                # does not advance the bookmark past the last successfully emitted record.
+                if batch_writer:
+                    checkpoint = batch_writer.write(record_message.record)
+                else:
+                    stream_utils.write_message(record_message)
+                    checkpoint = (rows_saved % 1000 == 0)
+
                 if replication_method in {'FULL_TABLE', 'LOG_BASED'}:
                     max_pk_values = singer.get_bookmark(state,
                                                         catalog_entry.tap_stream_id,
@@ -303,13 +311,8 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
                                                       'replication_key_value',
                                                       record_message.record[replication_key])
 
-                if batch_writer:
-                    if batch_writer.write(record_message.record):
-                        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
-                else:
-                    stream_utils.write_message(record_message)
-                    if rows_saved % 1000 == 0:
-                        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+                if checkpoint:
+                    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
     if batch_writer:
         batch_writer.flush()
