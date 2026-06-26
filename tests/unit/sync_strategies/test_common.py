@@ -1,9 +1,12 @@
+import datetime
+import decimal
 import gzip
 import io
 import json
 import os
 import tempfile
 import unittest
+import uuid
 
 import orjson
 
@@ -26,6 +29,24 @@ class TestBatchWriter(unittest.TestCase):
             writer = self._make_writer(tmpdir, batch_size=10, output=out)
             writer.flush()
         self.assertEqual(out.getvalue(), '')
+
+    # ------------------------------------------------------------------
+    # decimal.Decimal handling
+    # ------------------------------------------------------------------
+
+    def test_dump_special_types(self):
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            writer = self._make_writer(tmpdir, batch_size=100, output=out)
+            writer.write(
+                {
+                    'id': 1,
+                    'a_decimal': decimal.Decimal('1.618'),
+                    'a_date': datetime.datetime.now(tz=datetime.timezone.utc).date(),
+                    'a_datetime': datetime.datetime.now(tz=datetime.timezone.utc),
+                    'a_uuid': uuid.uuid4(),
+                },
+            )
 
     # ------------------------------------------------------------------
     # write() accumulates rows; flush() below batch_size
