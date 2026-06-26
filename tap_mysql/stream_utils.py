@@ -7,7 +7,7 @@ import singer
 from singer import metadata
 
 
-def _orjson_default(obj):
+def orjson_default(obj):
     if isinstance(obj, Decimal):
         return float(obj)
     raise TypeError(f'Object of type {type(obj)} is not JSON serializable')
@@ -37,7 +37,7 @@ class FastRecordMessage(singer.RecordMessage):
 
 
 def write_message(message):
-    sys.stdout.write(orjson.dumps(message.asdict(), default=_orjson_default).decode() + '\n')
+    sys.stdout.write(orjson.dumps(message.asdict(), default=orjson_default).decode() + '\n')
     sys.stdout.flush()
 
 

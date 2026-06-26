@@ -15,7 +15,7 @@ import singer
 from singer import metadata, metrics, utils
 
 from tap_mysql import stream_utils
-from tap_mysql.stream_utils import FastRecordMessage, get_key_properties
+from tap_mysql.stream_utils import FastRecordMessage, get_key_properties, orjson_default
 
 LOGGER = singer.get_logger('tap_mysql')
 
@@ -204,7 +204,7 @@ class BatchWriter:
             self._path = os.path.join(self._batch_config.batch_root_dir,
                                       f'tap-mysql-{uuid.uuid4().hex}.jsonl.gz')
             self._gz = gzip.open(self._path, 'wb')
-        self._gz.write(orjson.dumps(record) + b'\n')
+        self._gz.write(orjson.dumps(record, default=orjson_default) + b'\n')
         self._row_count += 1
         if self._row_count >= self._batch_config.batch_size:
             self.flush()
