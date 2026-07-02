@@ -17,6 +17,15 @@ from singer import metadata, metrics, utils
 from tap_mysql import stream_utils
 from tap_mysql.stream_utils import FastRecordMessage, get_key_properties, orjson_default
 
+if sys.version_info >= (3, 14):
+    # Use monotonic UUIDs (UUIDv7) when available, for better sortability and uniqueness in distributed systems.
+    def _uuid() -> uuid.UUID:
+        return uuid.uuid7()
+else:
+    def _uuid() -> uuid.UUID:
+        return uuid.uuid4()
+
+
 LOGGER = singer.get_logger('tap_mysql')
 
 
@@ -232,7 +241,7 @@ class BatchWriter:
         """
         if self._gz is None:
             self._path = os.path.join(self._batch_config.batch_root_dir,
-                                      f'tap-mysql-{uuid.uuid4().hex}.jsonl.gz')
+                                      f'tap-mysql-{_uuid().hex}.jsonl.gz')
             self._gz = gzip.open(self._path, 'wb')
         self._gz.write(orjson.dumps(record, default=orjson_default) + b'\n')
         self._row_count += 1
@@ -306,7 +315,7 @@ class ArrowBatchWriter:
             return
         import pyarrow.ipc as ipc  # local import: only reached when format == 'arrow'
 
-        path = os.path.join(self._batch_config.batch_root_dir, f'tap-mysql-{uuid.uuid4().hex}.arrow')
+        path = os.path.join(self._batch_config.batch_root_dir, f'tap-mysql-{_uuid().hex}.arrow')
         with ipc.new_file(path, self._schema) as writer:
             for batch in self._batches:
                 writer.write_batch(batch)
