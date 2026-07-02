@@ -49,6 +49,9 @@ jobs:
       - name: Setup virtual environment
         run: make venv
 
+      - name: Install ADBC driver
+        run: make dbc
+
       - name: Lint
         run: make lint
 
@@ -90,6 +93,9 @@ jobs:
 
       - name: Setup virtual environment
         run: make venv
+
+      - name: Install ADBC driver
+        run: make dbc
 
       - name: Integration Tests
         env:
@@ -138,6 +144,9 @@ jobs:
 
       - name: Setup virtual environment
         run: make venv
+
+      - name: Install ADBC driver
+        run: make dbc
 
       - name: Integration Tests
         env:
