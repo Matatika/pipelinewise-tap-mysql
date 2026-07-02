@@ -87,6 +87,9 @@ def generate_select_sql(catalog_entry, columns, null_invalid_dates: bool = False
         elif property_format == 'spatial':
             escaped_columns.append(
                 f'ST_AsGeoJSON({escaped_col}) as {escaped_col}')
+
+        # TODO: Remove this once the ADBC driver handles zero-dates properly
+        # https://github.com/adbc-drivers/mysql/issues/114
         elif null_invalid_dates and property_format == 'date-time':
             # MySQL allows storing invalid zero-dates (e.g. 0000-00-00), which the Arrow/ADBC
             # driver's date parser rejects outright. NULLIF-ing them out in SQL turns them into

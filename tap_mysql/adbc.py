@@ -134,6 +134,8 @@ def connect(config: dict):
     conn = adbc_dbapi.connect(driver='mysql', db_kwargs=db_kwargs, autocommit=True)
     try:
         with conn.cursor() as cur:
+            # TODO: Remove this once the ADBC driver handles zero-dates properly
+            # https://github.com/adbc-drivers/mysql/issues/114
             cur.execute(_RELAX_ZERO_DATE_SQL)
         yield conn
     finally:
