@@ -7,10 +7,28 @@ import os
 import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 import orjson
+from singer import Schema
+from singer.catalog import CatalogEntry
 
-from tap_mysql.sync_strategies.common import BatchConfig, BatchWriter
+from tap_mysql.sync_strategies.common import BatchConfig, BatchWriter, generate_select_sql
+
+
+def _make_catalog_entry(properties, database_name='my_db', table='mytable'):
+    return CatalogEntry(
+        table=table,
+        stream=f'{database_name}-{table}',
+        tap_stream_id=f'{database_name}-{table}',
+        schema=Schema(properties=properties),
+        metadata=[
+            {
+                'breadcrumb': [],
+                'metadata': {'database-name': database_name},
+            },
+        ],
+    )
 
 
 class TestBatchWriter(unittest.TestCase):
@@ -117,7 +135,7 @@ class TestBatchWriter(unittest.TestCase):
             for i in range(6):
                 writer.write({'id': i})
 
-            writer.flush()  # no remaining rows — no-op
+            writer.flush()  # no remaining rows - no-op
 
         messages = [json.loads(line) for line in out.getvalue().splitlines()]
         self.assertEqual(len(messages), 3)
@@ -252,6 +270,81 @@ class TestBatchConfig(unittest.TestCase):
         cfg = BatchConfig(batch_size=1000)
         with self.assertRaises(Exception):
             cfg.batch_size = 999  # type: ignore[misc]
+
+    def test_batch_config_defaults_to_jsonl_gz_format(self):
+        cfg = BatchConfig(batch_size=1000)
+        self.assertEqual(cfg.format, 'jsonl.gz')
+
+    def test_from_config_defaults_to_jsonl_gz_format(self):
+        cfg = BatchConfig.from_config({'batch_size_rows': 10})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.format, 'jsonl.gz')
+
+    def test_from_config_reads_batch_format_key(self):
+        with mock.patch('tap_mysql.adbc.require_arrow_support'):
+            cfg = BatchConfig.from_config({'batch_size_rows': 10, 'batch_format': 'arrow'})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.format, 'arrow')
+
+    def test_invalid_batch_format_raises(self):
+        with self.assertRaises(ValueError):
+            BatchConfig(batch_size=1000, format='xml')
+
+    def test_arrow_format_without_arrow_support_raises_actionable_error(self):
+        from tap_mysql import adbc
+
+        with mock.patch.object(adbc, '_import_adbc', side_effect=adbc.ArrowSupportError('missing extra')):
+            with self.assertRaises(adbc.ArrowSupportError):
+                BatchConfig(batch_size=1000, format='arrow')
+
+    def test_arrow_format_validates_via_require_arrow_support(self):
+        with mock.patch('tap_mysql.adbc.require_arrow_support') as mock_require:
+            BatchConfig(batch_size=1000, format='arrow')
+        mock_require.assert_called_once()
+
+
+class TestGenerateSelectSql(unittest.TestCase):
+
+    def _entry(self):
+        return _make_catalog_entry({
+            'id': Schema(type=['null', 'integer']),
+            'created_at': Schema(type=['null', 'string'], format='date-time'),
+            'updated_at': Schema(type=['null', 'string'], format='time'),
+            'photo': Schema(type=['null', 'string'], format='binary'),
+            'location': Schema(type=['null', 'object'], format='spatial'),
+        })
+
+    def test_null_invalid_dates_false_default_leaves_datetime_columns_unwrapped(self):
+        sql = generate_select_sql(self._entry(), ['id', 'created_at'])
+        self.assertNotIn('NULLIF', sql)
+        self.assertIn('`created_at`', sql)
+
+    def test_null_invalid_dates_true_wraps_date_time_columns_in_nullif_and_cast(self):
+        sql = generate_select_sql(self._entry(), ['id', 'created_at'], null_invalid_dates=True)
+        self.assertIn(
+            "CAST(NULLIF(NULLIF(`created_at`, '0000-00-00'), '0000-00-00 00:00:00') AS DATETIME) as `created_at`",
+            sql)
+
+    def test_null_invalid_dates_true_does_not_affect_time_column(self):
+        sql = generate_select_sql(self._entry(), ['updated_at'], null_invalid_dates=True)
+        self.assertNotIn('NULLIF', sql)
+        self.assertIn('`updated_at`', sql)
+
+    def test_null_invalid_dates_true_does_not_affect_binary_or_spatial_columns(self):
+        sql = generate_select_sql(self._entry(), ['photo', 'location'], null_invalid_dates=True)
+        self.assertNotIn('NULLIF', sql)
+        self.assertIn('hex(`photo`) as `photo`', sql)
+        self.assertIn('ST_AsGeoJSON(`location`) as `location`', sql)
+
+    def test_null_invalid_dates_true_does_not_affect_plain_columns(self):
+        sql = generate_select_sql(self._entry(), ['id'], null_invalid_dates=True)
+        self.assertNotIn('NULLIF', sql)
+        self.assertIn('`id`', sql)
+
+    def test_percent_escaping_still_applied_with_nullif(self):
+        sql = generate_select_sql(self._entry(), ['created_at'], null_invalid_dates=True)
+        self.assertNotIn('%%%%', sql)
+        self.assertEqual(sql.count('NULLIF'), 2)  # nested NULLIF(NULLIF(...))
 
 
 if __name__ == '__main__':

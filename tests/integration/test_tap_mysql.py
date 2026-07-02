@@ -135,7 +135,7 @@ class TestTypeMapping(unittest.TestCase):
         engine = os.getenv('TAP_MYSQL_ENGINE', MYSQL_ENGINE)
         if engine == MYSQL_ENGINE:
             # MySQL 8.0.17+ strips the display width from TINYINT(1) UNSIGNED, making it
-            # indistinguishable from TINYINT UNSIGNED — boolean detection is not possible.
+            # indistinguishable from TINYINT UNSIGNED - boolean detection is not possible.
             self.assertEqual(self.schema.properties['c_tinyint_1_unsigned'],
                              Schema(['null', 'integer'],
                                     inclusion='available',
