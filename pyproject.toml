@@ -24,13 +24,9 @@ dependencies = [
     "cryptography",
     "orjson",
     "tzlocal==5.3.1",
-    'backports-datetime-fromisoformat>=2.0.1; python_version<"3.11"',
-]
-
-[project.optional-dependencies]
-arrow = [
     "pyarrow>=17",
     "adbc-driver-manager>=0.11",
+    'backports-datetime-fromisoformat>=2.0.1; python_version<"3.11"',
 ]
 
 [dependency-groups]
@@ -39,8 +35,6 @@ dev = [
     "pytest-cov",
     "ruff",
     "python-dotenv",
-    "pyarrow>=17",
-    "adbc-driver-manager>=0.11",
 ]
 
 [project.urls]

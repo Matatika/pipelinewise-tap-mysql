@@ -19,7 +19,8 @@ class TestImportAdbc(unittest.TestCase):
             with self.assertRaises(adbc.ArrowSupportError) as ctx:
                 adbc._import_adbc()
 
-        self.assertIn('[arrow]', str(ctx.exception))
+        self.assertIn('pyarrow', str(ctx.exception))
+        self.assertIn('adbc-driver-manager', str(ctx.exception))
 
 
 class TestBuildUri(unittest.TestCase):

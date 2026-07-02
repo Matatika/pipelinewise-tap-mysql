@@ -108,7 +108,7 @@ def generate_select_sql(catalog_entry, columns, null_invalid_dates: bool = False
             # timestamp to a plain string (and, for the mysql-connector/JSONL path, would make
             # row_to_singer_record's isinstance(elem, datetime.datetime) check miss entirely).
             # This is opt-in (not applied for the default mysql-connector path) because it also
-            # requires relaxing NO_ZERO_DATE/NO_ZERO_IN_DATE in sql_mode (see adbc.py) — MySQL
+            # requires relaxing NO_ZERO_DATE/NO_ZERO_IN_DATE in sql_mode (see adbc.py) - MySQL
             # rejects the '0000-00-00' literal at parse time under the default strict sql_mode,
             # even though it's never actually returned.
             escaped_columns.append(
@@ -175,6 +175,10 @@ FETCH_BATCH_SIZE = 1000
 
 BATCH_FORMATS = frozenset({'jsonl.gz', 'arrow'})
 
+# Used when batch_format is set but batch_size_rows isn't -- matches the batch_size default
+# from the tap-mysql-arrow proof of concept this feature was ported from.
+DEFAULT_BATCH_SIZE = 500_000
+
 
 @dataclasses.dataclass(frozen=True)
 class BatchConfig:
@@ -199,18 +203,22 @@ class BatchConfig:
         if self.format not in BATCH_FORMATS:
             raise ValueError(f'batch_format must be one of {sorted(BATCH_FORMATS)}, got {self.format!r}')
         if self.format == 'arrow':
-            from tap_mysql import adbc  # local import: pyarrow/adbc are optional dependencies
+            # local import: avoid importing pyarrow/adbc-driver-manager unless actually needed
+            from tap_mysql import adbc
             adbc.require_arrow_support()
 
     @classmethod
     def from_config(cls, config: dict) -> 'Optional[BatchConfig]':
-        """Return a BatchConfig if batch_size_rows is set, else None (RECORD mode)."""
+        """Return a BatchConfig if batch_size_rows or batch_format is set, else None
+        (RECORD mode). Setting batch_format alone is enough to opt into BATCH mode --
+        batch_size_rows then defaults to DEFAULT_BATCH_SIZE rather than being required."""
         raw = config.get('batch_size_rows') or None
-        if raw is None:
+        batch_format = config.get('batch_format')
+        if raw is None and batch_format is None:
             return None
-        return cls(batch_size=int(raw),
+        return cls(batch_size=int(raw) if raw is not None else DEFAULT_BATCH_SIZE,
                    batch_root_dir=config.get('batch_root_dir', '.'),
-                   format=config.get('batch_format', 'jsonl.gz'))
+                   format=batch_format or 'jsonl.gz')
 
 
 class BatchWriter:
@@ -424,7 +432,7 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
 
 
 def _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batch_config):
-    from tap_mysql import adbc  # local import: pyarrow/adbc are optional dependencies
+    from tap_mysql import adbc  # local import: avoid importing pyarrow/adbc-driver-manager unless actually needed
 
     replication_key = singer.get_bookmark(state, catalog_entry.tap_stream_id, 'replication_key')
 

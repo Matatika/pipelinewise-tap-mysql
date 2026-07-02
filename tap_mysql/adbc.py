@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Optional Apache Arrow / ADBC connectivity for BATCH(format=arrow) mode.
+"""Apache Arrow / ADBC connectivity for BATCH(format=arrow) mode.
 
-``pyarrow`` and ``adbc-driver-manager`` are optional dependencies (extra:
-``arrow``). The native MySQL ADBC driver itself is not pip-installable and
-must be installed separately, e.g. via ``dbc install mysql`` (the CLI that
-ships with ``adbc-driver-manager`` - see
-https://docs.adbc-drivers.org/drivers/mysql/).
+``pyarrow`` and ``adbc-driver-manager`` are regular (required) dependencies of
+this package -- both are pure-wheel and pip-installable. The native MySQL ADBC
+driver itself is *not* pip-installable, though, and must be installed
+separately, e.g. via ``dbc install mysql`` (the CLI that ships with
+``adbc-driver-manager`` - see https://docs.adbc-drivers.org/drivers/mysql/).
+``batch_format='arrow'`` fails fast with an actionable error (see
+``require_arrow_support``) if that native driver isn't present, without
+requiring any extra Python packages beyond the tap's normal install.
 
 Nothing in this module is imported eagerly by the rest of the tap; it is
-only touched when ``batch_format == 'arrow'``, so installations that don't
-use Arrow BATCH mode never need these packages.
+only touched when ``batch_format == 'arrow'``.
 """
 
 import contextlib
@@ -39,14 +41,20 @@ class ArrowSupportError(RuntimeError):
 
 
 def _import_adbc():
-    """Lazily import pyarrow + adbc_driver_manager, raising an actionable error if unavailable."""
+    """Lazily import pyarrow + adbc_driver_manager.
+
+    Both are required dependencies of this package, so this should always succeed in a
+    correctly-installed environment; the try/except only guards against a broken/partial
+    install (e.g. `pip install --no-deps`).
+    """
     try:
         import pyarrow  # noqa: F401
         from adbc_driver_manager import dbapi as adbc_dbapi
     except ImportError as exc:
         raise ArrowSupportError(
-            "batch_format='arrow' requires the optional 'arrow' extra: "
-            "install with `pip install pipelinewise-tap-mysql[arrow]`."
+            "batch_format='arrow' requires 'pyarrow' and 'adbc-driver-manager', which should "
+            "already be installed as part of pipelinewise-tap-mysql. Try reinstalling with "
+            "`pip install --force-reinstall pipelinewise-tap-mysql`."
         ) from exc
     return adbc_dbapi
 

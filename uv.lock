@@ -591,6 +591,7 @@ wheels = [
 name = "pipelinewise-tap-mysql"
 source = { editable = "." }
 dependencies = [
+    { name = "adbc-driver-manager" },
     { name = "backports-datetime-fromisoformat", marker = "python_full_version < '3.11'" },
     { name = "cryptography" },
     { name = "mysql-connector-python" },
@@ -598,19 +599,12 @@ dependencies = [
     { name = "orjson" },
     { name = "pipelinewise-singer-python" },
     { name = "plpygis" },
-    { name = "tzlocal" },
-]
-
-[package.optional-dependencies]
-arrow = [
-    { name = "adbc-driver-manager" },
     { name = "pyarrow" },
+    { name = "tzlocal" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "adbc-driver-manager" },
-    { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "python-dotenv" },
@@ -619,7 +613,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "adbc-driver-manager", marker = "extra == 'arrow'", specifier = ">=0.11" },
+    { name = "adbc-driver-manager", specifier = ">=0.11" },
     { name = "backports-datetime-fromisoformat", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
     { name = "cryptography" },
     { name = "mysql-connector-python", specifier = "==9.7.0" },
@@ -627,15 +621,12 @@ requires-dist = [
     { name = "orjson" },
     { name = "pipelinewise-singer-python", specifier = "==1.*" },
     { name = "plpygis", specifier = "==0.6.1" },
-    { name = "pyarrow", marker = "extra == 'arrow'", specifier = ">=17" },
+    { name = "pyarrow", specifier = ">=17" },
     { name = "tzlocal", specifier = "==5.3.1" },
 ]
-provides-extras = ["arrow"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "adbc-driver-manager", specifier = ">=0.11" },
-    { name = "pyarrow", specifier = ">=17" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "python-dotenv" },

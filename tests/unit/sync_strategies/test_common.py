@@ -13,6 +13,7 @@ import orjson
 from singer import Schema
 from singer.catalog import CatalogEntry
 
+from tap_mysql.sync_strategies import common
 from tap_mysql.sync_strategies.common import BatchConfig, BatchWriter, generate_select_sql
 
 
@@ -285,6 +286,19 @@ class TestBatchConfig(unittest.TestCase):
             cfg = BatchConfig.from_config({'batch_size_rows': 10, 'batch_format': 'arrow'})
         self.assertIsNotNone(cfg)
         self.assertEqual(cfg.format, 'arrow')
+
+    def test_from_config_batch_format_alone_is_sufficient(self):
+        with mock.patch('tap_mysql.adbc.require_arrow_support'):
+            cfg = BatchConfig.from_config({'batch_format': 'arrow'})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.format, 'arrow')
+        self.assertEqual(cfg.batch_size, common.DEFAULT_BATCH_SIZE)
+
+    def test_from_config_batch_size_rows_overrides_default_when_batch_format_alone_set(self):
+        with mock.patch('tap_mysql.adbc.require_arrow_support'):
+            cfg = BatchConfig.from_config({'batch_format': 'arrow', 'batch_size_rows': 42})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.batch_size, 42)
 
     def test_invalid_batch_format_raises(self):
         with self.assertRaises(ValueError):

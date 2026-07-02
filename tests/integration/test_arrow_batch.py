@@ -114,6 +114,23 @@ class TestArrowBatchFullTable(unittest.TestCase):
         self.assertIn('ActivateVersionMessage', message_types)
         self.assertIn('StateMessage', message_types)
 
+    def test_batch_format_alone_is_sufficient_to_enable_arrow_batch_mode(self):
+        # no batch_size_rows -- batch_format alone should opt into BATCH mode
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                tap_mysql.do_sync(self.conn, {
+                    'batch_root_dir': tmpdir,
+                    'batch_format': 'arrow',
+                }, self.catalog, {})
+
+            batch_messages = _read_batch_messages(out.getvalue())
+            self.assertEqual(len(batch_messages), 1)
+            self.assertEqual(batch_messages[0]['encoding'], {'format': 'arrow'})
+            table = _read_arrow_table(batch_messages[0])
+
+        self.assertEqual(sorted(table.column('id').to_pylist()), [1, 2, 3, 4])
+
 
 @unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
 class TestArrowBatchIncremental(unittest.TestCase):

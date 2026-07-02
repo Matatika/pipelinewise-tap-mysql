@@ -58,6 +58,7 @@ plugins:
       user: root
       password: master1
       database: tap_mysql_test
+      batch_format: arrow
     select:
     - tap_mysql_test-perf_test.*
     metadata:
@@ -66,7 +67,7 @@ plugins:
   loaders:
   - name: target-duckdb
     variant: meltanolabs
-    pip_url: git+https://github.com/MeltanoLabs/target-duckdb.git
+    pip_url: git+https://github.com/MeltanoLabs/target-duckdb.git@main
     config:
       default_target_schema: tap_mysql_test
       path: ./output/warehouse.duckdb
