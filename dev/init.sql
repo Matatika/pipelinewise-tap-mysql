@@ -41,11 +41,16 @@ insert into r1 (c1, b1) values ('#8', True);
 create table perf_test (
     id int auto_increment primary key,
     val varchar(100),
-    ts datetime default current_timestamp()
+    ts datetime default current_timestamp(),
+    tags json,
+    meta json
 );
 
-insert into perf_test (val)
-select concat('row-', a.n + b.n * 10 + c.n * 100 + d.n * 1000 + e.n * 10000 + f.n * 100000 + 1)
+insert into perf_test (val, tags, meta)
+select
+    concat('row-', a.n + b.n * 10 + c.n * 100 + d.n * 1000 + e.n * 10000 + f.n * 100000 + 1),
+    json_array(concat('tag-', a.n), concat('tag-', b.n), concat('tag-', c.n)),
+    json_object('a', a.n, 'b', b.n, 'label', concat('meta-', a.n, '-', b.n))
 from (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) a
 cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) b
 cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) c

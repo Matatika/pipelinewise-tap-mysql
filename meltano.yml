@@ -58,6 +58,7 @@ plugins:
       user: root
       password: master1
       database: tap_mysql_test
+      batch_size_rows: 100000
       batch_format: arrow
     select:
     - tap_mysql_test-perf_test.*
