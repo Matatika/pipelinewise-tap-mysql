@@ -83,16 +83,41 @@ List of config parameters:
 | ssl_key           | string                        | No       | -                                                                                                                                                                 | for self-signed SSL                                                                                                       |
 | internal_hostname | string | No       | -                                                                                                                                                                 | Override match hostname for google cloud                                                                                  |
 | session_sqls      | List of strings               | No       | ```['SET @@session.time_zone="+0:00"', 'SET @@session.wait_timeout=28800', 'SET @@session.net_read_timeout=3600', 'SET @@session.innodb_lock_wait_timeout=3600']``` | Set session variables dynamically.                                                                                        |
-| batch_size_rows   | int                            | No       | -                                                                                                                                                                 | Enables Singer BATCH message mode. When set (or when `batch_format` is set - see below), rows are written in batches of this size to files under `batch_root_dir` instead of being emitted as individual RECORD messages. Defaults to 500000 if omitted while `batch_format` is set. |
-| batch_root_dir    | string                         | No       | `.`                                                                                                                                                               | Directory batch files are written to. Only used when BATCH mode is enabled.                                            |
-| batch_format      | string (`jsonl.gz` or `arrow`) | No       | `jsonl.gz`                                                                                                                                                        | Batch file encoding. Setting this alone (without `batch_size_rows`) is enough to enable BATCH mode. `arrow` enables Arrow BATCH mode (see below) - requires the MySQL ADBC driver. |
+| batch_config      | object                         | No       | -                                                                                                                                                                 | Enables Singer BATCH message mode (see below). Follows the [Meltano Singer SDK's `batch_config` shape](https://sdk.meltano.com) - presence of the key alone (even `{}`) is enough to opt in, with all sub-keys optional. |
 
+
+### BATCH mode
+
+Setting the `batch_config` key opts into Singer BATCH message mode: rows are written to files
+instead of being emitted as individual RECORD messages. The shape matches the [Meltano Singer
+SDK's `batch_config` setting](https://sdk.meltano.com) so it's consistent with other Singer taps,
+with one tap-mysql-specific extension (`encoding.format: "arrow"` - singer-sdk itself only defines
+`jsonl`/`parquet`):
+
+```json
+{
+  "batch_config": {
+    "encoding": {"format": "jsonl", "compression": "gzip"},
+    "storage": {"root": "/path/to/dir"},
+    "batch_size": 500000
+  }
+}
+```
+
+All sub-keys are optional and default sensibly - `{"batch_config": {}}` alone is enough to opt in:
+
+| Key                          | Type   | Default                    | Description                                                                 |
+|-------------------------------|--------|-----------------------------|-------------------------------------------------------------------------------|
+| `encoding.format`             | string (`jsonl` or `arrow`) | `jsonl` | Batch file encoding. `arrow` enables Arrow BATCH mode (see below) - requires the MySQL ADBC driver. |
+| `encoding.compression`        | string (`gzip` or `none`)   | `gzip`  | Compression for `jsonl`-encoded batch files. Ignored for `arrow`.            |
+| `storage.root`                | string                      | the OS temp directory (`tempfile.gettempdir()`) | Directory batch files are written to.                   |
+| `batch_size`                  | int                         | `500000`                    | Max number of rows per batch file.                                          |
 
 ### Arrow BATCH mode
 
-Setting `batch_format` to `arrow` switches BATCH mode from gzip-compressed JSONL files to Apache
-Arrow IPC files, read from MySQL via [ADBC](https://arrow.apache.org/adbc/) instead of row-by-row.
-This is significantly faster for large FULL_TABLE/INCREMENTAL syncs.
+Setting `encoding.format` to `arrow` switches BATCH mode from JSONL files to Apache Arrow IPC
+files, read from MySQL via [ADBC](https://arrow.apache.org/adbc/) instead of row-by-row. This is
+significantly faster for large FULL_TABLE/INCREMENTAL syncs.
 
 `pyarrow` and `adbc-driver-manager` (the Python DBAPI shim) are installed automatically as regular
 dependencies of this tap - no extra install step needed for those. The one thing that **is** a
@@ -100,8 +125,8 @@ separate step is the native MySQL ADBC driver itself, which isn't distributed on
 `dbc install mysql` (see https://docs.adbc-drivers.org/drivers/mysql/ for the `dbc` CLI, which
 ships with `adbc-driver-manager`).
 
-If `batch_format: arrow` is configured but that native driver isn't installed, the tap fails fast
-at startup with an actionable error message rather than partway through a sync.
+If `encoding.format: arrow` is configured but that native driver isn't installed, the tap fails
+fast at startup with an actionable error message rather than partway through a sync.
 
 Arrow BATCH mode only applies to FULL_TABLE and INCREMENTAL syncs (including a LOG_BASED stream's
 initial historical snapshot) - live binlog event tailing is unaffected.

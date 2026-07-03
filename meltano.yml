@@ -52,14 +52,25 @@ plugins:
       kind: string
     - name: session_sqls
       kind: array
+    - name: batch_config.encoding.format
+      kind: string
+      description: The format of the batch files. Only 'arrow' and 'jsonl' are supported. Defaults to 'arrow' if not specified.
+    - name: batch_config.storage.root
+      kind: string
+      description: The root directory where the batch files will be stored. Defaults to the system's temporary directory if not specified.
+    - name: batch_config.batch_size
+      kind: integer
+      description: The maximum number of rows in each batch file
     config:
       host: localhost
       port: 3307
       user: root
       password: master1
       database: tap_mysql_test
-      batch_size_rows: 100000
-      batch_format: arrow
+      batch_config:
+        encoding:
+          format: arrow
+        batch_size: 100000
     select:
     - tap_mysql_test-perf_test.*
     metadata:

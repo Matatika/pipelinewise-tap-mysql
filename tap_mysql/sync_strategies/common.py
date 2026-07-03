@@ -6,6 +6,7 @@ import datetime
 import gzip
 import os
 import sys
+import tempfile
 import time
 import uuid
 from typing import Optional
@@ -173,10 +174,11 @@ def whitelist_bookmark_keys(bookmark_key_set, tap_stream_id, state):
 
 FETCH_BATCH_SIZE = 1000
 
-BATCH_FORMATS = frozenset({'jsonl.gz', 'arrow'})
+BATCH_FORMATS = frozenset({'jsonl', 'arrow'})
+BATCH_COMPRESSIONS = frozenset({None, 'gzip', 'none'})
 
-# Used when batch_format is set but batch_size_rows isn't -- matches the batch_size default
-# from the tap-mysql-arrow proof of concept this feature was ported from.
+# Used when batch_config.batch_size isn't set -- matches the batch_size default from the
+# tap-mysql-arrow proof of concept this feature was ported from.
 DEFAULT_BATCH_SIZE = 500_000
 
 
@@ -184,16 +186,25 @@ DEFAULT_BATCH_SIZE = 500_000
 class BatchConfig:
     """Validated configuration for Singer BATCH message mode.
 
-    Constructing an instance validates that *batch_root_dir* exists and that
-    *format* is supported (and, for ``'arrow'``, that Arrow/ADBC support is
-    actually usable).  A value of ``None`` from callers means BATCH mode is
-    disabled - use ``BatchConfig.from_config`` to build one from a Singer
-    config dict.
+    Constructing an instance validates that *batch_root_dir* exists and that *format*/
+    *compression* are supported (and, for ``format='arrow'``, that Arrow/ADBC support is
+    actually usable). A value of ``None`` from callers means BATCH mode is disabled - use
+    ``BatchConfig.from_config`` to build one from a Singer config dict, which follows the
+    Meltano Singer SDK's nested ``batch_config`` shape (see
+    https://sdk.meltano.com -- ``singer_sdk.helpers._batch.BatchConfig``):
+
+        {"batch_config": {"encoding": {"format": "jsonl", "compression": "gzip"},
+                          "storage": {"root": "/path/to/dir"},
+                          "batch_size": 500000}}
+
+    ``format='arrow'`` is a tap-mysql-specific extension -- singer-sdk itself only defines
+    ``jsonl``/``parquet``.
     """
 
     batch_size: int
     batch_root_dir: str = '.'
-    format: str = 'jsonl.gz'
+    format: str = 'jsonl'
+    compression: 'Optional[str]' = 'gzip'
 
     def __post_init__(self):
         if self.batch_size <= 0:
@@ -201,28 +212,51 @@ class BatchConfig:
         if not os.path.isdir(self.batch_root_dir):
             raise ValueError(f'batch_root_dir does not exist or is not a directory: {self.batch_root_dir!r}')
         if self.format not in BATCH_FORMATS:
-            raise ValueError(f'batch_format must be one of {sorted(BATCH_FORMATS)}, got {self.format!r}')
+            raise ValueError(f'batch_config.encoding.format must be one of {sorted(BATCH_FORMATS)}, '
+                             f'got {self.format!r}')
+        if self.compression not in BATCH_COMPRESSIONS:
+            raise ValueError(f'batch_config.encoding.compression must be one of {sorted(BATCH_COMPRESSIONS, key=str)}, '
+                             f'got {self.compression!r}')
         if self.format == 'arrow':
             # local import: avoid importing pyarrow/adbc-driver-manager unless actually needed
             from tap_mysql import adbc
             adbc.require_arrow_support()
 
+    @property
+    def gzip_compressed(self) -> bool:
+        return self.compression == 'gzip'
+
     @classmethod
     def from_config(cls, config: dict) -> 'Optional[BatchConfig]':
-        """Return a BatchConfig if batch_size_rows or batch_format is set, else None
-        (RECORD mode). Setting batch_format alone is enough to opt into BATCH mode --
-        batch_size_rows then defaults to DEFAULT_BATCH_SIZE rather than being required."""
-        raw = config.get('batch_size_rows') or None
-        batch_format = config.get('batch_format')
-        if raw is None and batch_format is None:
+        """Return a BatchConfig if the (Meltano Singer SDK-shaped) ``batch_config`` key is
+        set, else None (RECORD mode). All sub-keys are optional: an empty
+        ``{"batch_config": {}}`` is enough to opt into BATCH mode with defaults (jsonl+gzip,
+        batch_size=DEFAULT_BATCH_SIZE, storage.root=the OS temp directory)."""
+        raw = config.get('batch_config')
+        if raw is None:
             return None
-        return cls(batch_size=int(raw) if raw is not None else DEFAULT_BATCH_SIZE,
-                   batch_root_dir=config.get('batch_root_dir', '.'),
-                   format=batch_format or 'jsonl.gz')
+        encoding = raw.get('encoding') or {}
+        storage = raw.get('storage') or {}
+        root= storage.get('root', tempfile.gettempdir())
+        conf = cls(
+            batch_size=int(raw.get('batch_size', DEFAULT_BATCH_SIZE)),
+            batch_root_dir=root,
+            format=encoding.get('format', 'jsonl'),
+            compression=encoding.get('compression', 'gzip'),
+        )
+        LOGGER.info(
+            'Using batch_config: format=%s, compression=%s, batch_size=%d, root=%s',
+            conf.format,
+            conf.compression,
+            conf.batch_size,
+            conf.batch_root_dir,
+        )
+        return conf
 
 
 class BatchWriter:
-    """Writes Singer BATCH messages as streaming JSONL.gz files.
+    """Writes Singer BATCH messages as streaming JSONL files, gzip-compressed unless
+    `batch_config.compression` says otherwise.
 
     Each call to `write()` appends one record to the current file.  When
     `batch_size` rows have been written the file is closed, a BATCH message is
@@ -248,9 +282,9 @@ class BatchWriter:
         was emitted and the writer has reset), False otherwise.
         """
         if self._gz is None:
-            self._path = os.path.join(self._batch_config.batch_root_dir,
-                                      f'tap-mysql-{_uuid().hex}.jsonl.gz')
-            self._gz = gzip.open(self._path, 'wb')
+            ext = '.jsonl.gz' if self._batch_config.gzip_compressed else '.jsonl'
+            self._path = os.path.join(self._batch_config.batch_root_dir, f'tap-mysql-{_uuid().hex}{ext}')
+            self._gz = gzip.open(self._path, 'wb') if self._batch_config.gzip_compressed else open(self._path, 'wb')
         self._gz.write(orjson.dumps(record, default=orjson_default) + b'\n')
         self._row_count += 1
         if self._row_count >= self._batch_config.batch_size:
@@ -273,7 +307,8 @@ class BatchWriter:
         msg = {
             'type': 'BATCH',
             'stream': self.stream_name,
-            'encoding': {'format': 'jsonl', 'compression': 'gzip'},
+            'encoding': {'format': 'jsonl',
+                        'compression': 'gzip' if self._batch_config.gzip_compressed else None},
             'manifest': [f'file://{self._path}'],
         }
         self._output.write(orjson.dumps(msg).decode() + '\n')

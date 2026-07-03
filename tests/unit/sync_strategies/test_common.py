@@ -245,64 +245,24 @@ class TestBatchConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             BatchConfig(batch_size=1000, batch_root_dir='/nonexistent/path/xyz')
 
-    def test_from_config_returns_none_when_not_set(self):
-        self.assertIsNone(BatchConfig.from_config({}))
-        self.assertIsNone(BatchConfig.from_config({'batch_size_rows': 0}))
-        self.assertIsNone(BatchConfig.from_config({'batch_size_rows': None}))
-
-    def test_from_config_returns_batch_config(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = BatchConfig.from_config({'batch_size_rows': 250000, 'batch_root_dir': tmpdir})
-            self.assertIsNotNone(cfg)
-            self.assertEqual(cfg.batch_size, 250000)
-            self.assertEqual(cfg.batch_root_dir, tmpdir)
-
-    def test_from_config_default_batch_root_dir(self):
-        cfg = BatchConfig.from_config({'batch_size_rows': 80000})
-        self.assertIsNotNone(cfg)
-        self.assertEqual(cfg.batch_root_dir, '.')
-
-    def test_from_config_coerces_string_batch_size(self):
-        cfg = BatchConfig.from_config({'batch_size_rows': '250000'})
-        self.assertIsNotNone(cfg)
-        self.assertEqual(cfg.batch_size, 250000)
-
     def test_is_frozen(self):
         cfg = BatchConfig(batch_size=1000)
         with self.assertRaises(Exception):
             cfg.batch_size = 999  # type: ignore[misc]
 
-    def test_batch_config_defaults_to_jsonl_gz_format(self):
+    def test_defaults_to_jsonl_gzip(self):
         cfg = BatchConfig(batch_size=1000)
-        self.assertEqual(cfg.format, 'jsonl.gz')
-
-    def test_from_config_defaults_to_jsonl_gz_format(self):
-        cfg = BatchConfig.from_config({'batch_size_rows': 10})
-        self.assertIsNotNone(cfg)
-        self.assertEqual(cfg.format, 'jsonl.gz')
-
-    def test_from_config_reads_batch_format_key(self):
-        with mock.patch('tap_mysql.adbc.require_arrow_support'):
-            cfg = BatchConfig.from_config({'batch_size_rows': 10, 'batch_format': 'arrow'})
-        self.assertIsNotNone(cfg)
-        self.assertEqual(cfg.format, 'arrow')
-
-    def test_from_config_batch_format_alone_is_sufficient(self):
-        with mock.patch('tap_mysql.adbc.require_arrow_support'):
-            cfg = BatchConfig.from_config({'batch_format': 'arrow'})
-        self.assertIsNotNone(cfg)
-        self.assertEqual(cfg.format, 'arrow')
-        self.assertEqual(cfg.batch_size, common.DEFAULT_BATCH_SIZE)
-
-    def test_from_config_batch_size_rows_overrides_default_when_batch_format_alone_set(self):
-        with mock.patch('tap_mysql.adbc.require_arrow_support'):
-            cfg = BatchConfig.from_config({'batch_format': 'arrow', 'batch_size_rows': 42})
-        self.assertIsNotNone(cfg)
-        self.assertEqual(cfg.batch_size, 42)
+        self.assertEqual(cfg.format, 'jsonl')
+        self.assertEqual(cfg.compression, 'gzip')
+        self.assertTrue(cfg.gzip_compressed)
 
     def test_invalid_batch_format_raises(self):
         with self.assertRaises(ValueError):
             BatchConfig(batch_size=1000, format='xml')
+
+    def test_invalid_compression_raises(self):
+        with self.assertRaises(ValueError):
+            BatchConfig(batch_size=1000, compression='brotli')
 
     def test_arrow_format_without_arrow_support_raises_actionable_error(self):
         from tap_mysql import adbc
@@ -315,6 +275,53 @@ class TestBatchConfig(unittest.TestCase):
         with mock.patch('tap_mysql.adbc.require_arrow_support') as mock_require:
             BatchConfig(batch_size=1000, format='arrow')
         mock_require.assert_called_once()
+
+
+class TestBatchConfigFromConfig(unittest.TestCase):
+    """BatchConfig.from_config parses the Meltano Singer SDK-shaped nested `batch_config`
+    key: {"batch_config": {"encoding": {...}, "storage": {...}, "batch_size": ...}}."""
+
+    def test_returns_none_when_batch_config_key_absent(self):
+        self.assertIsNone(BatchConfig.from_config({}))
+
+    def test_empty_batch_config_is_sufficient_to_opt_in_with_defaults(self):
+        cfg = BatchConfig.from_config({'batch_config': {}})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.batch_size, common.DEFAULT_BATCH_SIZE)
+        self.assertEqual(cfg.format, 'jsonl')
+        self.assertEqual(cfg.compression, 'gzip')
+
+    def test_defaults_storage_root_to_os_temp_dir(self):
+        cfg = BatchConfig.from_config({'batch_config': {}})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.batch_root_dir, tempfile.gettempdir())
+
+    def test_reads_storage_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = BatchConfig.from_config({'batch_config': {'storage': {'root': tmpdir}}})
+            self.assertIsNotNone(cfg)
+            self.assertEqual(cfg.batch_root_dir, tmpdir)
+
+    def test_reads_batch_size(self):
+        cfg = BatchConfig.from_config({'batch_config': {'batch_size': 250000}})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.batch_size, 250000)
+
+    def test_coerces_string_batch_size(self):
+        cfg = BatchConfig.from_config({'batch_config': {'batch_size': '250000'}})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.batch_size, 250000)
+
+    def test_reads_encoding_format_and_compression(self):
+        with mock.patch('tap_mysql.adbc.require_arrow_support'):
+            cfg = BatchConfig.from_config({'batch_config': {'encoding': {'format': 'arrow'}}})
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.format, 'arrow')
+
+    def test_encoding_compression_none_disables_gzip(self):
+        cfg = BatchConfig.from_config({'batch_config': {'encoding': {'compression': 'none'}}})
+        self.assertIsNotNone(cfg)
+        self.assertFalse(cfg.gzip_compressed)
 
 
 class TestGenerateSelectSql(unittest.TestCase):

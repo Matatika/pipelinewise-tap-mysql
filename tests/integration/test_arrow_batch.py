@@ -36,7 +36,8 @@ def _read_arrow_table(batch_message):
 
 @unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
 class TestArrowBatchFullTable(unittest.TestCase):
-    """Exercises FULL_TABLE sync with batch_format='arrow' against a real MySQL server.
+    """Exercises FULL_TABLE sync with batch_config.encoding.format='arrow' against a real
+    MySQL server.
 
     Runs through the actual ADBC connection path (tap_mysql/adbc.py), which the mocked
     unit tests in tests/unit/ can't verify: real driver connectivity, and that the
@@ -80,9 +81,11 @@ class TestArrowBatchFullTable(unittest.TestCase):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 tap_mysql.do_sync(self.conn, {
-                    'batch_size_rows': 2,
-                    'batch_root_dir': tmpdir,
-                    'batch_format': 'arrow',
+                    'batch_config': {
+                        'encoding': {'format': 'arrow'},
+                        'storage': {'root': tmpdir},
+                        'batch_size': 2,
+                    },
                 }, self.catalog, {})
 
             batch_messages = _read_batch_messages(out.getvalue())
@@ -114,14 +117,16 @@ class TestArrowBatchFullTable(unittest.TestCase):
         self.assertIn('ActivateVersionMessage', message_types)
         self.assertIn('StateMessage', message_types)
 
-    def test_batch_format_alone_is_sufficient_to_enable_arrow_batch_mode(self):
-        # no batch_size_rows -- batch_format alone should opt into BATCH mode
+    def test_encoding_format_alone_is_sufficient_to_enable_arrow_batch_mode(self):
+        # no explicit batch_size -- encoding.format alone should opt into BATCH mode
         with tempfile.TemporaryDirectory() as tmpdir:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 tap_mysql.do_sync(self.conn, {
-                    'batch_root_dir': tmpdir,
-                    'batch_format': 'arrow',
+                    'batch_config': {
+                        'encoding': {'format': 'arrow'},
+                        'storage': {'root': tmpdir},
+                    },
                 }, self.catalog, {})
 
             batch_messages = _read_batch_messages(out.getvalue())
@@ -134,8 +139,8 @@ class TestArrowBatchFullTable(unittest.TestCase):
 
 @unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
 class TestArrowBatchIncremental(unittest.TestCase):
-    """Exercises INCREMENTAL sync with batch_format='arrow', specifically to verify that
-    ADBC's MySQL driver accepts the same named-placeholder parameter style
+    """Exercises INCREMENTAL sync with batch_config.encoding.format='arrow', specifically to
+    verify that ADBC's MySQL driver accepts the same named-placeholder parameter style
     (`%(replication_key_value)s`) that incremental.py's WHERE clause uses -- this can't be
     verified by mocked unit tests and was an explicitly-flagged open risk.
     """
@@ -180,9 +185,11 @@ class TestArrowBatchIncremental(unittest.TestCase):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 tap_mysql.do_sync(self.conn, {
-                    'batch_size_rows': 10,
-                    'batch_root_dir': tmpdir,
-                    'batch_format': 'arrow',
+                    'batch_config': {
+                        'encoding': {'format': 'arrow'},
+                        'storage': {'root': tmpdir},
+                        'batch_size': 10,
+                    },
                 }, self.catalog, state)
 
             batch_messages = _read_batch_messages(out.getvalue())

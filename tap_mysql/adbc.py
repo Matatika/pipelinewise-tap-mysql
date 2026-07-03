@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Apache Arrow / ADBC connectivity for BATCH(format=arrow) mode.
+"""Apache Arrow / ADBC connectivity for batch_config.encoding.format='arrow' mode.
 
 ``pyarrow`` and ``adbc-driver-manager`` are regular (required) dependencies of
 this package -- both are pure-wheel and pip-installable. The native MySQL ADBC
 driver itself is *not* pip-installable, though, and must be installed
 separately, e.g. via ``dbc install mysql`` (the CLI that ships with
 ``adbc-driver-manager`` - see https://docs.adbc-drivers.org/drivers/mysql/).
-``batch_format='arrow'`` fails fast with an actionable error (see
+Arrow BATCH mode fails fast with an actionable error (see
 ``require_arrow_support``) if that native driver isn't present, without
 requiring any extra Python packages beyond the tap's normal install.
 
 Nothing in this module is imported eagerly by the rest of the tap; it is
-only touched when ``batch_format == 'arrow'``.
+only touched when ``batch_config.encoding.format == 'arrow'``.
 """
 
 import contextlib
@@ -37,7 +37,7 @@ _NAMED_PARAM_RE = re.compile(r'%\((\w+)\)s')
 
 
 class ArrowSupportError(RuntimeError):
-    """Raised when batch_format='arrow' is requested but Arrow/ADBC support is unavailable."""
+    """Raised when Arrow BATCH mode is requested but Arrow/ADBC support is unavailable."""
 
 
 def _import_adbc():
@@ -52,7 +52,7 @@ def _import_adbc():
         from adbc_driver_manager import dbapi as adbc_dbapi
     except ImportError as exc:
         raise ArrowSupportError(
-            "batch_format='arrow' requires 'pyarrow' and 'adbc-driver-manager', which should "
+            "Arrow BATCH mode requires 'pyarrow' and 'adbc-driver-manager', which should "
             "already be installed as part of pipelinewise-tap-mysql. Try reinstalling with "
             "`pip install --force-reinstall pipelinewise-tap-mysql`."
         ) from exc
@@ -80,7 +80,7 @@ def require_arrow_support() -> None:
         if 'uri' in str(exc).lower():
             return
         raise ArrowSupportError(
-            "batch_format='arrow' is configured but the native MySQL ADBC driver could not "
+            "Arrow BATCH mode is configured but the native MySQL ADBC driver could not "
             "be loaded. The 'adbc-driver-manager'/'pyarrow' Python packages are installed, "
             "but the MySQL ADBC driver itself is missing. Install it with `dbc install mysql` "
             "(see https://docs.adbc-drivers.org/drivers/mysql/). "
