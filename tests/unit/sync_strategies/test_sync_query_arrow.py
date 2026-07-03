@@ -136,6 +136,19 @@ class TestSyncQueryArrow(unittest.TestCase):
 
         self.assertEqual(len(state_messages), 2)
 
+    def test_no_duplicate_state_when_last_batch_lands_on_checkpoint_boundary(self):
+        # batch_size=3, batch1 has exactly 3 rows: the last (and only) batch hits the
+        # checkpoint threshold exactly, so a STATE is written inside the loop. The final
+        # unconditional write after the loop must not repeat that identical STATE message.
+        state = {'bookmarks': {STREAM_ID: {'max_pk_values': {'id': 3}}}}
+        batch1 = pa.RecordBatch.from_pylist([{'id': 1, 'name': 'a'}, {'id': 2, 'name': 'b'}, {'id': 3, 'name': 'c'}])
+
+        state_messages = []
+        with mock.patch('tap_mysql.stream_utils.write_message', side_effect=lambda m: state_messages.append(m)):
+            self._run(_full_table_entry(), state, [batch1], batch_size=3)
+
+        self.assertEqual(len(state_messages), 1)
+
     def test_metrics_counter_incremented_by_batch_num_rows_not_per_row(self):
         state = {'bookmarks': {STREAM_ID: {'max_pk_values': {'id': 5}}}}
         batch1 = pa.RecordBatch.from_pylist([{'id': 1, 'name': 'a'}, {'id': 2, 'name': 'b'}, {'id': 3, 'name': 'c'}])

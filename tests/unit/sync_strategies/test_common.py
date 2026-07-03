@@ -361,5 +361,61 @@ class TestGenerateSelectSql(unittest.TestCase):
         self.assertEqual(sql.count('NULLIF'), 2)  # nested NULLIF(NULLIF(...))
 
 
+class _FakeCursor:
+    """Minimal fake mysql-connector-style cursor: returns rows once, then exhausts."""
+
+    def __init__(self, rows):
+        self._batches = [rows]
+
+    def execute(self, sql, params):
+        pass
+
+    def fetchmany(self, size):
+        if self._batches:
+            return self._batches.pop(0)
+        return []
+
+
+class TestSyncQueryStateDeduplication(unittest.TestCase):
+    """sync_query's JSONL/BATCH path shares the same checkpoint-boundary STATE-emission
+    logic as _sync_query_arrow -- guards against the identical duplicate-StateMessage bug
+    on that path too."""
+
+    def _full_table_entry(self, stream_id='my_db-mytable'):
+        return CatalogEntry(
+            table='mytable',
+            stream=stream_id,
+            tap_stream_id=stream_id,
+            schema=Schema(properties={
+                'id': Schema(type=['null', 'integer']),
+                'name': Schema(type=['null', 'string']),
+            }),
+            metadata=[
+                {
+                    'breadcrumb': [],
+                    'metadata': {
+                        'database-name': 'my_db',
+                        'replication-method': 'FULL_TABLE',
+                        'table-key-properties': ['id'],
+                    },
+                },
+            ],
+        )
+
+    def test_no_duplicate_state_when_last_row_lands_on_checkpoint_boundary(self):
+        stream_id = 'my_db-mytable'
+        state = {'bookmarks': {stream_id: {'max_pk_values': {'id': 3}}}}
+        cursor = _FakeCursor([(1, 'a'), (2, 'b'), (3, 'c')])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            batch_config = BatchConfig(batch_size=3, batch_root_dir=tmpdir)
+            state_messages = []
+            with mock.patch('tap_mysql.stream_utils.write_message', side_effect=state_messages.append):
+                common.sync_query(cursor, self._full_table_entry(stream_id), state, 'SELECT 1',
+                                  ['id', 'name'], 1, {}, batch_config=batch_config)
+
+        self.assertEqual(len(state_messages), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

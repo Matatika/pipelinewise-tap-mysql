@@ -370,6 +370,12 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
 
     batch_writer = BatchWriter(catalog_entry.stream, batch_config) if batch_config else None
 
+    # Tracks whether the most recently written record already triggered a checkpoint (and
+    # therefore already emitted a StateMessage reflecting the current state) -- avoids
+    # writing an identical, redundant StateMessage below when the last row/batch happens to
+    # land exactly on a checkpoint boundary.
+    checkpoint = False
+
     with metrics.record_counter(None) as counter:
         counter.tags['database'] = database_name
         counter.tags['table'] = catalog_entry.table
@@ -428,7 +434,8 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
     if batch_writer:
         batch_writer.flush()
 
-    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+    if not checkpoint:
+        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
 
 def _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batch_config):
@@ -445,6 +452,12 @@ def _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batc
     batch_writer = ArrowBatchWriter(catalog_entry.stream, batch_config)
 
     LOGGER.info('Running (Arrow/ADBC) %s', select_sql)
+
+    # Tracks whether the most recently written batch already triggered a checkpoint (and
+    # therefore already emitted a StateMessage reflecting the current state) -- avoids
+    # writing an identical, redundant StateMessage below when the last RecordBatch happens
+    # to land exactly on a checkpoint boundary.
+    checkpoint = False
 
     with metrics.record_counter(None) as counter:
         counter.tags['database'] = database_name
@@ -492,4 +505,5 @@ def _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batc
 
     batch_writer.flush()
 
-    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+    if not checkpoint:
+        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
