@@ -86,3 +86,17 @@ plugins:
   - name: target-csv
     variant: meltanolabs
     pip_url: meltanolabs-target-csv
+
+  mappers:
+  - name: "mapper-fivetran"
+    namespace: "mapper_fivetran"
+    pip_url: git+https://github.com/Matatika/mapper-fivetran.git@main
+
+    settings:
+    - name: batch_config.storage.root
+      kind: string
+      description: The root directory where the batch files will be stored. Defaults to the system's temporary directory if not specified.
+
+    # https://docs.meltano.com/guide/mappers/#example-1
+    mappings:
+    - name: fivetran
