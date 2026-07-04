@@ -6,6 +6,7 @@ import datetime
 import gzip
 import os
 import sys
+import tempfile
 import time
 import uuid
 from typing import Optional
@@ -16,6 +17,15 @@ from singer import metadata, metrics, utils
 
 from tap_mysql import stream_utils
 from tap_mysql.stream_utils import FastRecordMessage, get_key_properties, orjson_default
+
+if sys.version_info >= (3, 14):
+    # Use monotonic UUIDs (UUIDv7) when available, for better sortability and uniqueness in distributed systems.
+    def _uuid() -> uuid.UUID:
+        return uuid.uuid7()
+else:
+    def _uuid() -> uuid.UUID:
+        return uuid.uuid4()
+
 
 LOGGER = singer.get_logger('tap_mysql')
 
@@ -66,7 +76,7 @@ def get_database_name(catalog_entry):
     return md_map.get((), {}).get('database-name')
 
 
-def generate_select_sql(catalog_entry, columns):
+def generate_select_sql(catalog_entry, columns, null_invalid_dates: bool = False):
     database_name = get_database_name(catalog_entry)
     escaped_db = escape(database_name)
     escaped_table = escape(catalog_entry.table)
@@ -87,6 +97,24 @@ def generate_select_sql(catalog_entry, columns):
         elif property_format == 'spatial':
             escaped_columns.append(
                 f'ST_AsGeoJSON({escaped_col}) as {escaped_col}')
+
+        # TODO: Remove this once the ADBC driver handles zero-dates properly
+        # https://github.com/adbc-drivers/mysql/issues/114
+        elif null_invalid_dates and property_format == 'date-time':
+            # MySQL allows storing invalid zero-dates (e.g. 0000-00-00), which the Arrow/ADBC
+            # driver's date parser rejects outright. NULLIF-ing them out in SQL turns them into
+            # NULL before they reach the driver. The outer CAST is required too: MySQL's NULLIF
+            # returns a string-typed result when comparing a DATETIME column against a string
+            # literal, which would otherwise silently degrade the Arrow column from a native
+            # timestamp to a plain string (and, for the mysql-connector/JSONL path, would make
+            # row_to_singer_record's isinstance(elem, datetime.datetime) check miss entirely).
+            # This is opt-in (not applied for the default mysql-connector path) because it also
+            # requires relaxing NO_ZERO_DATE/NO_ZERO_IN_DATE in sql_mode (see adbc.py) - MySQL
+            # rejects the '0000-00-00' literal at parse time under the default strict sql_mode,
+            # even though it's never actually returned.
+            escaped_columns.append(
+                "CAST(NULLIF(NULLIF("
+                f"{escaped_col}, '0000-00-00'), '0000-00-00 00:00:00') AS DATETIME) as {escaped_col}")
         else:
             escaped_columns.append(escaped_col)
 
@@ -146,36 +174,89 @@ def whitelist_bookmark_keys(bookmark_key_set, tap_stream_id, state):
 
 FETCH_BATCH_SIZE = 1000
 
+BATCH_FORMATS = frozenset({'jsonl', 'arrow'})
+BATCH_COMPRESSIONS = frozenset({None, 'gzip', 'none'})
+
+# Used when batch_config.batch_size isn't set -- matches the batch_size default from the
+# tap-mysql-arrow proof of concept this feature was ported from.
+DEFAULT_BATCH_SIZE = 500_000
+
 
 @dataclasses.dataclass(frozen=True)
 class BatchConfig:
     """Validated configuration for Singer BATCH message mode.
 
-    Constructing an instance validates that *batch_root_dir* exists.  A value
-    of ``None`` from callers means BATCH mode is disabled — use
-    ``BatchConfig.from_config`` to build one from a Singer config dict.
+    Constructing an instance validates that *batch_root_dir* exists and that *format*/
+    *compression* are supported (and, for ``format='arrow'``, that Arrow/ADBC support is
+    actually usable). A value of ``None`` from callers means BATCH mode is disabled - use
+    ``BatchConfig.from_config`` to build one from a Singer config dict, which follows the
+    Meltano Singer SDK's nested ``batch_config`` shape (see
+    https://sdk.meltano.com -- ``singer_sdk.helpers._batch.BatchConfig``):
+
+        {"batch_config": {"encoding": {"format": "jsonl", "compression": "gzip"},
+                          "storage": {"root": "/path/to/dir"},
+                          "batch_size": 500000}}
+
+    ``format='arrow'`` is a tap-mysql-specific extension -- singer-sdk itself only defines
+    ``jsonl``/``parquet``.
     """
 
     batch_size: int
     batch_root_dir: str = '.'
+    format: str = 'jsonl'
+    compression: 'Optional[str]' = 'gzip'
 
     def __post_init__(self):
         if self.batch_size <= 0:
             raise ValueError(f'batch_size must be a positive integer, got {self.batch_size}')
         if not os.path.isdir(self.batch_root_dir):
             raise ValueError(f'batch_root_dir does not exist or is not a directory: {self.batch_root_dir!r}')
+        if self.format not in BATCH_FORMATS:
+            raise ValueError(f'batch_config.encoding.format must be one of {sorted(BATCH_FORMATS)}, '
+                             f'got {self.format!r}')
+        if self.compression not in BATCH_COMPRESSIONS:
+            raise ValueError(f'batch_config.encoding.compression must be one of {sorted(BATCH_COMPRESSIONS, key=str)}, '
+                             f'got {self.compression!r}')
+        if self.format == 'arrow':
+            # local import: avoid importing pyarrow/adbc-driver-manager unless actually needed
+            from tap_mysql import adbc
+            adbc.require_arrow_support()
+
+    @property
+    def gzip_compressed(self) -> bool:
+        return self.compression == 'gzip'
 
     @classmethod
     def from_config(cls, config: dict) -> 'Optional[BatchConfig]':
-        """Return a BatchConfig if batch_size_rows is set, else None (RECORD mode)."""
-        raw = config.get('batch_size_rows') or None
+        """Return a BatchConfig if the (Meltano Singer SDK-shaped) ``batch_config`` key is
+        set, else None (RECORD mode). All sub-keys are optional: an empty
+        ``{"batch_config": {}}`` is enough to opt into BATCH mode with defaults (jsonl+gzip,
+        batch_size=DEFAULT_BATCH_SIZE, storage.root=the OS temp directory)."""
+        raw = config.get('batch_config')
         if raw is None:
             return None
-        return cls(batch_size=int(raw), batch_root_dir=config.get('batch_root_dir', '.'))
+        encoding = raw.get('encoding') or {}
+        storage = raw.get('storage') or {}
+        root= storage.get('root', tempfile.gettempdir())
+        conf = cls(
+            batch_size=int(raw.get('batch_size', DEFAULT_BATCH_SIZE)),
+            batch_root_dir=root,
+            format=encoding.get('format', 'jsonl'),
+            compression=encoding.get('compression', 'gzip'),
+        )
+        LOGGER.info(
+            'Using batch_config: format=%s, compression=%s, batch_size=%d, root=%s',
+            conf.format,
+            conf.compression,
+            conf.batch_size,
+            conf.batch_root_dir,
+        )
+        return conf
 
 
 class BatchWriter:
-    """Writes Singer BATCH messages as streaming JSONL.gz files.
+    """Writes Singer BATCH messages as streaming JSONL files, gzip-compressed unless
+    `batch_config.compression` says otherwise.
 
     Each call to `write()` appends one record to the current file.  When
     `batch_size` rows have been written the file is closed, a BATCH message is
@@ -201,9 +282,9 @@ class BatchWriter:
         was emitted and the writer has reset), False otherwise.
         """
         if self._gz is None:
-            self._path = os.path.join(self._batch_config.batch_root_dir,
-                                      f'tap-mysql-{uuid.uuid4().hex}.jsonl.gz')
-            self._gz = gzip.open(self._path, 'wb')
+            ext = '.jsonl.gz' if self._batch_config.gzip_compressed else '.jsonl'
+            self._path = os.path.join(self._batch_config.batch_root_dir, f'tap-mysql-{_uuid().hex}{ext}')
+            self._gz = gzip.open(self._path, 'wb') if self._batch_config.gzip_compressed else open(self._path, 'wb')
         self._gz.write(orjson.dumps(record, default=orjson_default) + b'\n')
         self._row_count += 1
         if self._row_count >= self._batch_config.batch_size:
@@ -226,7 +307,8 @@ class BatchWriter:
         msg = {
             'type': 'BATCH',
             'stream': self.stream_name,
-            'encoding': {'format': 'jsonl', 'compression': 'gzip'},
+            'encoding': {'format': 'jsonl',
+                        'compression': 'gzip' if self._batch_config.gzip_compressed else None},
             'manifest': [f'file://{self._path}'],
         }
         self._output.write(orjson.dumps(msg).decode() + '\n')
@@ -236,8 +318,72 @@ class BatchWriter:
         self._row_count = 0
 
 
+class ArrowBatchWriter:
+    """Writes Singer BATCH messages as Arrow IPC file-format files.
+
+    Buffers `pyarrow.RecordBatch` objects (as received from ADBC, with no per-row
+    Python materialization) until accumulated rows reach `batch_size`, then writes
+    them to a single Arrow IPC file and emits a BATCH message. Mirrors BatchWriter's
+    write()/flush() contract but write() takes a pyarrow.RecordBatch, not a dict.
+    """
+
+    def __init__(self, stream_name: str, batch_config: BatchConfig, output=None):
+        self.stream_name = stream_name
+        self._batch_config = batch_config
+        self._output = output if output is not None else sys.stdout
+        self._batches = []
+        self._row_count = 0
+        self._schema = None
+
+    def write(self, record_batch) -> bool:
+        """Buffer *record_batch*. Returns True if this write completed a full batch
+        (a BATCH message was emitted and the writer reset), False otherwise."""
+        if record_batch.num_rows == 0:
+            return False
+        if self._schema is None:
+            self._schema = record_batch.schema
+        self._batches.append(record_batch)
+        self._row_count += record_batch.num_rows
+        if self._row_count >= self._batch_config.batch_size:
+            self.flush()
+            return True
+        return False
+
+    def flush(self):
+        """Emit a BATCH message for any buffered batches, then reset.
+
+        No-op when no batches have been written since the last flush.
+        """
+        if not self._batches:
+            return
+        import pyarrow.ipc as ipc  # local import: only reached when format == 'arrow'
+
+        path = os.path.join(self._batch_config.batch_root_dir, f'tap-mysql-{_uuid().hex}.arrow')
+        with ipc.new_file(path, self._schema) as writer:
+            for batch in self._batches:
+                writer.write_batch(batch)
+        size_bytes = os.path.getsize(path)
+        LOGGER.info('Wrote Arrow batch file: %s (%d rows, %d bytes)', path, self._row_count, size_bytes)
+        msg = {
+            'type': 'BATCH',
+            'stream': self.stream_name,
+            'encoding': {'format': 'arrow'},
+            'manifest': [f'file://{path}'],
+        }
+        self._output.write(orjson.dumps(msg).decode() + '\n')
+        self._output.flush()
+        self._batches = []
+        self._row_count = 0
+        self._schema = None
+
+
 def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params,
-               batch_config: 'Optional[BatchConfig]' = None):
+               batch_config: 'Optional[BatchConfig]' = None,
+               mysql_conn=None):
+    if batch_config is not None and batch_config.format == 'arrow':
+        _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batch_config)
+        return
+
     replication_key = singer.get_bookmark(state,
                                           catalog_entry.tap_stream_id,
                                           'replication_key')
@@ -258,6 +404,12 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
     key_properties = get_key_properties(catalog_entry) if replication_method in {'FULL_TABLE', 'LOG_BASED'} else []
 
     batch_writer = BatchWriter(catalog_entry.stream, batch_config) if batch_config else None
+
+    # Tracks whether the most recently written record already triggered a checkpoint (and
+    # therefore already emitted a StateMessage reflecting the current state) -- avoids
+    # writing an identical, redundant StateMessage below when the last row/batch happens to
+    # land exactly on a checkpoint boundary.
+    checkpoint = False
 
     with metrics.record_counter(None) as counter:
         counter.tags['database'] = database_name
@@ -317,4 +469,76 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
     if batch_writer:
         batch_writer.flush()
 
-    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+    if not checkpoint:
+        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+
+
+def _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batch_config):
+    from tap_mysql import adbc  # local import: avoid importing pyarrow/adbc-driver-manager unless actually needed
+
+    replication_key = singer.get_bookmark(state, catalog_entry.tap_stream_id, 'replication_key')
+
+    md_map = metadata.to_map(catalog_entry.metadata)
+    stream_metadata = md_map.get((), {})
+    replication_method = stream_metadata.get('replication-method')
+    key_properties = get_key_properties(catalog_entry) if replication_method in {'FULL_TABLE', 'LOG_BASED'} else []
+
+    database_name = get_database_name(catalog_entry)
+    batch_writer = ArrowBatchWriter(catalog_entry.stream, batch_config)
+
+    LOGGER.info('Running (Arrow/ADBC) %s', select_sql)
+
+    # Tracks whether the most recently written batch already triggered a checkpoint (and
+    # therefore already emitted a StateMessage reflecting the current state) -- avoids
+    # writing an identical, redundant StateMessage below when the last RecordBatch happens
+    # to land exactly on a checkpoint boundary.
+    checkpoint = False
+
+    with metrics.record_counter(None) as counter:
+        counter.tags['database'] = database_name
+        counter.tags['table'] = catalog_entry.table
+
+        with adbc.stream_record_batches(mysql_conn.raw_config, select_sql, params) as reader:
+            for record_batch in reader:
+                if record_batch.num_rows == 0:
+                    continue
+
+                counter.increment(record_batch.num_rows)
+
+                # Write before updating bookmarks so that a mid-write exception does not
+                # advance the bookmark past the last successfully emitted batch.
+                checkpoint = batch_writer.write(record_batch)
+
+                last_row_idx = record_batch.num_rows - 1
+                if replication_method in {'FULL_TABLE', 'LOG_BASED'}:
+                    max_pk_values = singer.get_bookmark(state, catalog_entry.tap_stream_id, 'max_pk_values')
+
+                    if max_pk_values and key_properties:
+                        last_pk_fetched = {
+                            pk: record_batch.column(pk)[last_row_idx].as_py()
+                            for pk in key_properties
+                        }
+
+                        state = singer.write_bookmark(state,
+                                                      catalog_entry.tap_stream_id,
+                                                      'last_pk_fetched',
+                                                      last_pk_fetched)
+
+                elif replication_method == 'INCREMENTAL':
+                    if replication_key is not None:
+                        state = singer.write_bookmark(state,
+                                                      catalog_entry.tap_stream_id,
+                                                      'replication_key',
+                                                      replication_key)
+
+                        state = singer.write_bookmark(
+                            state, catalog_entry.tap_stream_id, 'replication_key_value',
+                            record_batch.column(replication_key)[last_row_idx].as_py())
+
+                if checkpoint:
+                    stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+
+    batch_writer.flush()
+
+    if not checkpoint:
+        stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))

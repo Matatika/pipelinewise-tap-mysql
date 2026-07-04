@@ -80,6 +80,10 @@ class MySQLConnection:
         self._ssl_temp_files: list[str] = []
         self.session_sqls = config.get('session_sqls', DEFAULT_SESSION_SQLS)
 
+    @property
+    def raw_config(self) -> dict:
+        return self._config
+
     @staticmethod
     def _write_ssl_tempfile(pem_data: str) -> str:
         """Write PEM data to a private temp file, returning its path."""
@@ -166,7 +170,7 @@ class MySQLConnection:
 
 
 class _PyMySQLConnectionBase(pymysql.connections.Connection):
-    """Internal pymysql connection — kept only for BinLogStreamReader compatibility."""
+    """Internal pymysql connection - kept only for BinLogStreamReader compatibility."""
 
     def __init__(self, config):
         args = {

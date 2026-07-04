@@ -83,7 +83,64 @@ List of config parameters:
 | ssl_key           | string                        | No       | -                                                                                                                                                                 | for self-signed SSL                                                                                                       |
 | internal_hostname | string | No       | -                                                                                                                                                                 | Override match hostname for google cloud                                                                                  |
 | session_sqls      | List of strings               | No       | ```['SET @@session.time_zone="+0:00"', 'SET @@session.wait_timeout=28800', 'SET @@session.net_read_timeout=3600', 'SET @@session.innodb_lock_wait_timeout=3600']``` | Set session variables dynamically.                                                                                        |
+| batch_config      | object                         | No       | -                                                                                                                                                                 | Enables Singer BATCH message mode (see below). Follows the [Meltano Singer SDK's `batch_config` shape](https://sdk.meltano.com) - presence of the key alone (even `{}`) is enough to opt in, with all sub-keys optional. |
 
+
+### BATCH mode
+
+Setting the `batch_config` key opts into Singer BATCH message mode: rows are written to files
+instead of being emitted as individual RECORD messages. The shape matches the [Meltano Singer
+SDK's `batch_config` setting](https://sdk.meltano.com) so it's consistent with other Singer taps,
+with one tap-mysql-specific extension (`encoding.format: "arrow"` - singer-sdk itself only defines
+`jsonl`/`parquet`):
+
+```json
+{
+  "batch_config": {
+    "encoding": {"format": "jsonl", "compression": "gzip"},
+    "storage": {"root": "/path/to/dir"},
+    "batch_size": 500000
+  }
+}
+```
+
+All sub-keys are optional and default sensibly - `{"batch_config": {}}` alone is enough to opt in:
+
+| Key                          | Type   | Default                    | Description                                                                 |
+|-------------------------------|--------|-----------------------------|-------------------------------------------------------------------------------|
+| `encoding.format`             | string (`jsonl` or `arrow`) | `jsonl` | Batch file encoding. `arrow` enables Arrow BATCH mode (see below) - requires the MySQL ADBC driver. |
+| `encoding.compression`        | string (`gzip` or `none`)   | `gzip`  | Compression for `jsonl`-encoded batch files. Ignored for `arrow`.            |
+| `storage.root`                | string                      | the OS temp directory (`tempfile.gettempdir()`) | Directory batch files are written to.                   |
+| `batch_size`                  | int                         | `500000`                    | Max number of rows per batch file.                                          |
+
+### Arrow BATCH mode
+
+Setting `encoding.format` to `arrow` switches BATCH mode from JSONL files to Apache Arrow IPC
+files, read from MySQL via [ADBC](https://arrow.apache.org/adbc/) instead of row-by-row. This is
+significantly faster for large FULL_TABLE/INCREMENTAL syncs.
+
+`pyarrow` and `adbc-driver-manager` (the Python DBAPI shim) are installed automatically as regular
+dependencies of this tap - no extra install step needed for those. The one thing that **is** a
+separate step is the native MySQL ADBC driver itself, which isn't distributed on PyPI:
+`dbc install mysql` (see https://docs.adbc-drivers.org/drivers/mysql/ for the `dbc` CLI, which
+ships with `adbc-driver-manager`).
+
+If `encoding.format: arrow` is configured but that native driver isn't installed, the tap fails
+fast at startup with an actionable error message rather than partway through a sync.
+
+Arrow BATCH mode only applies to FULL_TABLE and INCREMENTAL syncs (including a LOG_BASED stream's
+initial historical snapshot) - live binlog event tailing is unaffected.
+
+In Arrow mode, MySQL zero-dates (e.g. `0000-00-00`), which the ADBC driver's date parser rejects
+outright, are converted to `NULL` for `date-time`-formatted columns via SQL, matching
+`mysql-connector`'s own client-side behavior for invalid dates in the default (non-Arrow) path.
+This requires relaxing the `NO_ZERO_DATE`/`NO_ZERO_IN_DATE` session SQL modes on the Arrow
+connection, since MySQL otherwise rejects the zero-date literal at parse time even when it's never
+actually returned.
+
+Downstream consumers of Arrow BATCH files are responsible for handling Arrow-native types (e.g.
+`decimal128` precision/scale) themselves - the tap passes `RecordBatch`es through untouched, with
+no JSON round-tripping in Arrow mode.
 
 ### Discovery mode
 

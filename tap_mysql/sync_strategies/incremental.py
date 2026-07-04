@@ -62,6 +62,11 @@ def sync_table(mysql_conn, catalog_entry, state, columns, batch_config=None):
 
     stream_utils.write_message(activate_version_message)
 
+    retryable_exceptions = (mysql.connector.errors.OperationalError,)
+    if batch_config is not None and batch_config.format == 'arrow':
+        from tap_mysql import adbc
+        retryable_exceptions += adbc.get_retryable_exceptions()
+
     last_error = None
     for attempt in range(MAX_SYNC_RETRIES):
         if attempt > 0:
@@ -78,7 +83,9 @@ def sync_table(mysql_conn, catalog_entry, state, columns, batch_config=None):
         try:
             with connect_with_backoff(mysql_conn) as open_conn:
                 with open_conn.cursor() as cur:
-                    select_sql = common.generate_select_sql(catalog_entry, columns)
+                    select_sql = common.generate_select_sql(
+                        catalog_entry, columns,
+                        null_invalid_dates=(batch_config is not None and batch_config.format == 'arrow'))
                     params = {}
 
                     if replication_key_value is not None:
@@ -100,9 +107,10 @@ def sync_table(mysql_conn, catalog_entry, state, columns, batch_config=None):
                                       columns,
                                       stream_version,
                                       params,
-                                      batch_config=batch_config)
+                                      batch_config=batch_config,
+                                      mysql_conn=mysql_conn)
             break
-        except mysql.connector.errors.OperationalError as e:
+        except retryable_exceptions as e:
             last_error = e
             if attempt == MAX_SYNC_RETRIES - 1:
                 raise

@@ -9,3 +9,6 @@ unit_test:
 
 integration_test:
 	uv run pytest tests/integration --cov=tap_mysql --cov-report=html $(extra_args) -vvv
+
+dbc:
+	uvx dbc sync

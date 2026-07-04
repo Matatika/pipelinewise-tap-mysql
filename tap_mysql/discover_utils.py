@@ -83,7 +83,7 @@ def _normalize_column_type(col: 'Column') -> str:
     m = _INTEGER_DISPLAY_WIDTH_RE.match(column_type)
     if m:
         base_type, width, modifiers = m.group(1), m.group(2), m.group(3).strip()
-        # tinyint(1) unsigned is the canonical boolean+unsigned form — preserve it
+        # tinyint(1) unsigned is the canonical boolean+unsigned form - preserve it
         if base_type == 'tinyint' and width == '1' and modifiers == 'unsigned':
             return column_type
         return (base_type + (' ' + modifiers if modifiers else '')).strip()

@@ -24,6 +24,8 @@ dependencies = [
     "cryptography",
     "orjson",
     "tzlocal==5.3.1",
+    "pyarrow>=17",
+    "adbc-driver-manager>=0.11",
     'backports-datetime-fromisoformat>=2.0.1; python_version<"3.11"',
 ]
 

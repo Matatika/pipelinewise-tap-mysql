@@ -25,7 +25,7 @@ class FastRecordMessage(singer.RecordMessage):
         self.stream = stream
         self.record = record
         self.version = version
-        self.time_extracted = time_extracted_str  # already a string — no tzinfo check
+        self.time_extracted = time_extracted_str  # already a string - no tzinfo check
 
     def asdict(self):
         result = {'type': 'RECORD', 'stream': self.stream, 'record': self.record}
