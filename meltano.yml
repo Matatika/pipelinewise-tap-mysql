@@ -54,7 +54,7 @@ plugins:
       kind: array
     - name: batch_config.encoding.format
       kind: string
-      description: The format of the batch files. Only 'arrow' and 'jsonl' are supported. Defaults to 'arrow' if not specified.
+      description: The format of the batch files. Only 'arrow' and 'jsonl' are supported. Defaults to 'jsonl' if not specified.
     - name: batch_config.storage.root
       kind: string
       description: The root directory where the batch files will be stored. Defaults to the system's temporary directory if not specified.
