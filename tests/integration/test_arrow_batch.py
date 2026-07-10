@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import pyarrow as pa
 import pyarrow.ipc as ipc
 
 import tap_mysql
@@ -55,12 +56,22 @@ class TestArrowBatchFullTable(unittest.TestCase):
         with connect_with_backoff(self.conn) as open_conn:
             with open_conn.cursor() as cursor:
                 cursor.execute(
-                    'CREATE TABLE arrow_full (id int primary key, name varchar(100), created_at datetime)')
-                cursor.execute("INSERT INTO arrow_full (id, name, created_at) VALUES (1, 'a', '2020-01-01 00:00:00')")
-                cursor.execute("INSERT INTO arrow_full (id, name, created_at) VALUES (2, 'b', '2020-01-02 00:00:00')")
-                cursor.execute("INSERT INTO arrow_full (id, name, created_at) VALUES (3, 'c', '2020-01-03 00:00:00')")
+                    'CREATE TABLE arrow_full ('
+                    'id int primary key, name varchar(100), created_at datetime, '
+                    'is_active tinyint(1), is_bit bit(1))')
+                cursor.execute(
+                    "INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) "
+                    "VALUES (1, 'a', '2020-01-01 00:00:00', 0, 0)")
+                cursor.execute(
+                    "INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) "
+                    "VALUES (2, 'b', '2020-01-02 00:00:00', 1, 1)")
+                cursor.execute(
+                    "INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) "
+                    "VALUES (3, 'c', '2020-01-03 00:00:00', 1, 0)")
                 cursor.execute("SET SESSION sql_mode=''")
-                cursor.execute("INSERT INTO arrow_full (id, name, created_at) VALUES (4, 'd', '0000-00-00 00:00:00')")
+                cursor.execute(
+                    "INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) "
+                    "VALUES (4, 'd', '0000-00-00 00:00:00', NULL, NULL)")
 
         self.catalog = test_utils.discover_catalog(self.conn, {})
         for stream in self.catalog.streams:
@@ -70,6 +81,8 @@ class TestArrowBatchFullTable(unittest.TestCase):
                 {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
                 {'breadcrumb': ('properties', 'name'), 'metadata': {'selected': True}},
                 {'breadcrumb': ('properties', 'created_at'), 'metadata': {'selected': True}},
+                {'breadcrumb': ('properties', 'is_active'), 'metadata': {'selected': True}},
+                {'breadcrumb': ('properties', 'is_bit'), 'metadata': {'selected': True}},
             ]
             test_utils.set_replication_method_and_key(stream, 'FULL_TABLE', None)
 
@@ -100,16 +113,27 @@ class TestArrowBatchFullTable(unittest.TestCase):
             rows_by_id = {}
             for msg in batch_messages:
                 table = _read_arrow_table(msg)
-                for id_, name, created_at in zip(table.column('id').to_pylist(),
-                                                 table.column('name').to_pylist(),
-                                                 table.column('created_at').to_pylist()):
-                    rows_by_id[id_] = (name, created_at)
+                self.assertEqual(table.column('is_active').type, pa.bool_())
+                self.assertEqual(table.column('is_bit').type, pa.bool_())
+                for id_, name, created_at, is_active, is_bit in zip(
+                        table.column('id').to_pylist(),
+                        table.column('name').to_pylist(),
+                        table.column('created_at').to_pylist(),
+                        table.column('is_active').to_pylist(),
+                        table.column('is_bit').to_pylist()):
+                    rows_by_id[id_] = (name, created_at, is_active, is_bit)
 
         self.assertEqual(sorted(rows_by_id), [1, 2, 3, 4])
         self.assertEqual(rows_by_id[1][0], 'a')
         self.assertIsNotNone(rows_by_id[1][1])
         # the invalid zero-date row must come through as NULL, not crash the ADBC read
         self.assertIsNone(rows_by_id[4][1])
+
+        # booleans must come through as native Arrow bool (True/False), not raw 0/1
+        self.assertEqual(rows_by_id[1][2:], (False, False))
+        self.assertEqual(rows_by_id[2][2:], (True, True))
+        self.assertEqual(rows_by_id[3][2:], (True, False))
+        self.assertEqual(rows_by_id[4][2:], (None, None))
 
         # BATCH messages bypass write_message, but SCHEMA/ACTIVATE_VERSION/STATE don't
         message_types = [type(m).__name__ for m in self.singer_messages]

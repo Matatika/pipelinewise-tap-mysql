@@ -35,6 +35,7 @@ dev = [
     "pytest-cov",
     "ruff",
     "python-dotenv",
+    "pyarrow-stubs>=20.0.0.20260625",
 ]
 
 [project.urls]
