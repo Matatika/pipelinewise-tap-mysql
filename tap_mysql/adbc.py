@@ -14,6 +14,8 @@ Nothing in this module is imported eagerly by the rest of the tap; it is
 only touched when ``batch_config.encoding.format == 'arrow'``.
 """
 
+from __future__ import annotations
+
 import contextlib
 import re
 from typing import Optional
