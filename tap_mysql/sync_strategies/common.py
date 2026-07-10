@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # pylint: disable=missing-function-docstring,too-many-arguments,too-many-locals
+
+from __future__ import annotations
+
 import copy
 import dataclasses
 import datetime
@@ -9,7 +12,7 @@ import sys
 import tempfile
 import time
 import uuid
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import orjson
 import singer
@@ -17,6 +20,9 @@ from singer import metadata, metrics, utils
 
 from tap_mysql import stream_utils
 from tap_mysql.stream_utils import FastRecordMessage, get_key_properties, orjson_default
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 if sys.version_info >= (3, 14):
     # Use monotonic UUIDs (UUIDv7) when available, for better sortability and uniqueness in distributed systems.
@@ -331,11 +337,11 @@ class ArrowBatchWriter:
         self.stream_name = stream_name
         self._batch_config = batch_config
         self._output = output if output is not None else sys.stdout
-        self._batches = []
+        self._batches: list[pa.RecordBatch] = []
         self._row_count = 0
         self._schema = None
 
-    def write(self, record_batch) -> bool:
+    def write(self, record_batch: pa.RecordBatch) -> bool:
         """Buffer *record_batch*. Returns True if this write completed a full batch
         (a BATCH message was emitted and the writer reset), False otherwise."""
         if record_batch.num_rows == 0:
@@ -359,6 +365,7 @@ class ArrowBatchWriter:
         import pyarrow.ipc as ipc  # local import: only reached when format == 'arrow'
 
         path = os.path.join(self._batch_config.batch_root_dir, f'tap-mysql-{_uuid().hex}.arrow')
+        assert self._schema is not None
         with ipc.new_file(path, self._schema) as writer:
             for batch in self._batches:
                 writer.write_batch(batch)
@@ -375,6 +382,43 @@ class ArrowBatchWriter:
         self._batches = []
         self._row_count = 0
         self._schema = None
+
+
+def _boolean_columns(catalog_entry) -> set:
+    """Names of columns whose Singer schema type is boolean (MySQL TINYINT(1)/BOOLEAN/BIT).
+
+    Mirrors the `'boolean' in property_type or property_type == 'boolean'` check in
+    row_to_singer_record, so BATCH-arrow output represents these the same way RECORD/JSONL
+    output does.
+    """
+    return {
+        name for name, prop in catalog_entry.schema.properties.items()
+        if prop.type is not None and ('boolean' in prop.type or prop.type == 'boolean')
+    }
+
+
+def _cast_boolean_columns(record_batch: 'pa.RecordBatch', boolean_columns: set) -> 'pa.RecordBatch':
+    """Recast *boolean_columns* present in *record_batch* to Arrow's native boolean type.
+
+    The ADBC MySQL driver surfaces TINYINT(1)/BOOLEAN columns as plain int8 (0/1) and BIT
+    columns as binary (b'\\x00'/b'\\x01'), with no awareness of MySQL's boolean convention -
+    unlike the mysql-connector/JSONL path (row_to_singer_record), which already renders these
+    as Python True/False. Nonzero values are treated as true, mirroring
+    row_to_singer_record's `elem in (0, b'\\x00')` check.
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    for name in boolean_columns:
+        if name not in record_batch.schema.names:
+            continue
+        idx = record_batch.schema.get_field_index(name)
+        column = record_batch.column(idx)
+        if pa.types.is_boolean(column.type):
+            continue
+        zero = b'\x00' if pa.types.is_binary(column.type) or pa.types.is_fixed_size_binary(column.type) else 0
+        record_batch = record_batch.set_column(idx, pa.field(name, pa.bool_()), pc.not_equal(column, zero))
+    return record_batch
 
 
 def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version, params,
@@ -485,6 +529,7 @@ def _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batc
 
     database_name = get_database_name(catalog_entry)
     batch_writer = ArrowBatchWriter(catalog_entry.stream, batch_config)
+    boolean_columns = _boolean_columns(catalog_entry)
 
     LOGGER.info('Running (Arrow/ADBC) %s', select_sql)
 
@@ -498,12 +543,16 @@ def _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batc
         counter.tags['database'] = database_name
         counter.tags['table'] = catalog_entry.table
 
+        reader: pa.RecordBatchReader
         with adbc.stream_record_batches(mysql_conn.raw_config, select_sql, params) as reader:
             for record_batch in reader:
                 if record_batch.num_rows == 0:
                     continue
 
                 counter.increment(record_batch.num_rows)
+
+                if boolean_columns:
+                    record_batch = _cast_boolean_columns(record_batch, boolean_columns)
 
                 # Write before updating bookmarks so that a mid-write exception does not
                 # advance the bookmark past the last successfully emitted batch.
