@@ -83,9 +83,7 @@ def sync_table(mysql_conn, catalog_entry, state, columns, batch_config=None):
         try:
             with connect_with_backoff(mysql_conn) as open_conn:
                 with open_conn.cursor() as cur:
-                    select_sql = common.generate_select_sql(
-                        catalog_entry, columns,
-                        null_invalid_dates=(batch_config is not None and batch_config.format == 'arrow'))
+                    select_sql = common.generate_select_sql(catalog_entry, columns)
                     params = {}
 
                     if replication_key_value is not None:

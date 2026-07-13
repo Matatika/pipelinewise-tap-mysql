@@ -3,6 +3,6 @@ version = 1
 
 [[drivers]]
 name = 'mysql'
-version = '0.4.0'
+version = '0.5.0'
 platform = 'macos_arm64'
-checksum = 'c3d40f803e124ebdb28461bd1f0ce497e52c5635b821e7d1586ad9f9ac2c74a5'
+checksum = 'b886d964a0bd15c433a8dd0a8c1364a67a9f2917a2edb2541a3aa1860abbbf67'

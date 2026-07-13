@@ -22,6 +22,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 import singer
+from adbc_driver_manager import AdbcDatabase, dbapi
 
 LOGGER = singer.get_logger('tap_mysql')
 
@@ -42,25 +43,6 @@ class ArrowSupportError(RuntimeError):
     """Raised when Arrow BATCH mode is requested but Arrow/ADBC support is unavailable."""
 
 
-def _import_adbc():
-    """Lazily import pyarrow + adbc_driver_manager.
-
-    Both are required dependencies of this package, so this should always succeed in a
-    correctly-installed environment; the try/except only guards against a broken/partial
-    install (e.g. `pip install --no-deps`).
-    """
-    try:
-        import pyarrow  # noqa: F401
-        from adbc_driver_manager import dbapi as adbc_dbapi
-    except ImportError as exc:
-        raise ArrowSupportError(
-            "Arrow BATCH mode requires 'pyarrow' and 'adbc-driver-manager', which should "
-            "already be installed as part of pipelinewise-tap-mysql. Try reinstalling with "
-            "`pip install --force-reinstall pipelinewise-tap-mysql`."
-        ) from exc
-    return adbc_dbapi
-
-
 def require_arrow_support() -> None:
     """Eagerly validate Arrow/ADBC support is usable.
 
@@ -68,10 +50,6 @@ def require_arrow_support() -> None:
     aren't installed, or if the native MySQL ADBC driver can't be loaded. Called from
     BatchConfig.__post_init__ so failures surface at startup, not mid-sync.
     """
-    _import_adbc()
-
-    from adbc_driver_manager import AdbcDatabase
-
     try:
         # Constructing *without* a `uri` never opens a network connection: the MySQL
         # ADBC driver only reaches its "missing required option uri" validation error
@@ -83,9 +61,8 @@ def require_arrow_support() -> None:
             return
         raise ArrowSupportError(
             "Arrow BATCH mode is configured but the native MySQL ADBC driver could not "
-            "be loaded. The 'adbc-driver-manager'/'pyarrow' Python packages are installed, "
-            "but the MySQL ADBC driver itself is missing. Install it with `dbc install mysql` "
-            "(see https://docs.adbc-drivers.org/drivers/mysql/). "
+            "be loaded. The MySQL ADBC driver itself is missing. Install it with "
+            "`dbc install mysql` (see https://docs.adbc-drivers.org/drivers/mysql/). "
             f"Underlying error: {exc}"
         ) from exc
     else:
@@ -134,19 +111,28 @@ def connect(config: dict):
     Reuses the same config keys as MySQLConnection (host/port/user/password/database/
     ssl_ca/ssl_cert/ssl_key) - no new config keys introduced for connectivity.
     """
-    adbc_dbapi = _import_adbc()
     db_kwargs = _build_db_kwargs(config)
     db_kwargs['uri'] = _build_uri(
-        config['host'], int(config['port']), config['user'], config['password'], config.get('database'))
+        config['host'],
+        int(config['port']),
+        config['user'],
+        config['password'],
+        config.get('database'),
+    )
 
     # TODO: Stop passing autocommit=True once the ADBC driver support transactions properly
     # https://github.com/adbc-drivers/mysql/issues/55
-    conn = adbc_dbapi.connect(driver='mysql', db_kwargs=db_kwargs, autocommit=True)
-    try:
-        with conn.cursor() as cur:
-            # TODO: Remove this once the ADBC driver handles zero-dates properly
+    conn = dbapi.connect(
+        driver='mysql',
+        db_kwargs=db_kwargs,
+        conn_kwargs={
             # https://github.com/adbc-drivers/mysql/issues/114
-            cur.execute(_RELAX_ZERO_DATE_SQL)
+            # https://github.com/adbc-drivers/mysql/pull/116
+            'mysql.query.zero_datetime_behavior': 'convert_to_null',
+        },
+        autocommit=True,
+    )
+    try:
         yield conn
     finally:
         conn.close()

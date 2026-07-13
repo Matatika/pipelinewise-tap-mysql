@@ -111,7 +111,7 @@ jobs:
         run: docker compose down
 
   integration_test_mysql:
-    name: Intergation tests with Mysql database
+    name: Integration tests with Mysql database
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

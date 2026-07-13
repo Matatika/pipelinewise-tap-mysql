@@ -264,13 +264,6 @@ class TestBatchConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             BatchConfig(batch_size=1000, compression='brotli')
 
-    def test_arrow_format_without_arrow_support_raises_actionable_error(self):
-        from tap_mysql import adbc
-
-        with mock.patch.object(adbc, '_import_adbc', side_effect=adbc.ArrowSupportError('missing extra')):
-            with self.assertRaises(adbc.ArrowSupportError):
-                BatchConfig(batch_size=1000, format='arrow')
-
     def test_arrow_format_validates_via_require_arrow_support(self):
         with mock.patch('tap_mysql.adbc.require_arrow_support') as mock_require:
             BatchConfig(batch_size=1000, format='arrow')
@@ -340,32 +333,25 @@ class TestGenerateSelectSql(unittest.TestCase):
         self.assertNotIn('NULLIF', sql)
         self.assertIn('`created_at`', sql)
 
-    def test_null_invalid_dates_true_wraps_date_time_columns_in_nullif_and_cast(self):
-        sql = generate_select_sql(self._entry(), ['id', 'created_at'], null_invalid_dates=True)
-        self.assertIn(
-            "CAST(NULLIF(NULLIF(`created_at`, '0000-00-00'), '0000-00-00 00:00:00') AS DATETIME) as `created_at`",
-            sql)
-
     def test_null_invalid_dates_true_does_not_affect_time_column(self):
-        sql = generate_select_sql(self._entry(), ['updated_at'], null_invalid_dates=True)
+        sql = generate_select_sql(self._entry(), ['updated_at'])
         self.assertNotIn('NULLIF', sql)
         self.assertIn('`updated_at`', sql)
 
     def test_null_invalid_dates_true_does_not_affect_binary_or_spatial_columns(self):
-        sql = generate_select_sql(self._entry(), ['photo', 'location'], null_invalid_dates=True)
+        sql = generate_select_sql(self._entry(), ['photo', 'location'])
         self.assertNotIn('NULLIF', sql)
         self.assertIn('hex(`photo`) as `photo`', sql)
         self.assertIn('ST_AsGeoJSON(`location`) as `location`', sql)
 
     def test_null_invalid_dates_true_does_not_affect_plain_columns(self):
-        sql = generate_select_sql(self._entry(), ['id'], null_invalid_dates=True)
+        sql = generate_select_sql(self._entry(), ['id'])
         self.assertNotIn('NULLIF', sql)
         self.assertIn('`id`', sql)
 
     def test_percent_escaping_still_applied_with_nullif(self):
-        sql = generate_select_sql(self._entry(), ['created_at'], null_invalid_dates=True)
+        sql = generate_select_sql(self._entry(), ['created_at'])
         self.assertNotIn('%%%%', sql)
-        self.assertEqual(sql.count('NULLIF'), 2)  # nested NULLIF(NULLIF(...))
 
 
 class _FakeCursor:
