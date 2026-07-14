@@ -125,6 +125,8 @@ separate step is the native MySQL ADBC driver itself, which isn't distributed on
 `dbc install mysql` (see https://docs.adbc-drivers.org/drivers/mysql/ for the `dbc` CLI, which
 ships with `adbc-driver-manager`).
 
+Note that the ADBC mysql driver 0.5.0 or later is required.
+
 If `encoding.format: arrow` is configured but that native driver isn't installed, the tap fails
 fast at startup with an actionable error message rather than partway through a sync.
 

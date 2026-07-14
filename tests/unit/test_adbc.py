@@ -1,26 +1,7 @@
-import builtins
 import unittest
 from unittest import mock
 
 from tap_mysql import adbc
-
-
-class TestImportAdbc(unittest.TestCase):
-
-    def test_import_adbc_missing_dependency_raises_actionable_error(self):
-        real_import = builtins.__import__
-
-        def fake_import(name, *args, **kwargs):
-            if name in ('pyarrow', 'adbc_driver_manager', 'adbc_driver_manager.dbapi'):
-                raise ImportError(f'No module named {name!r}')
-            return real_import(name, *args, **kwargs)
-
-        with mock.patch('builtins.__import__', side_effect=fake_import):
-            with self.assertRaises(adbc.ArrowSupportError) as ctx:
-                adbc._import_adbc()
-
-        self.assertIn('pyarrow', str(ctx.exception))
-        self.assertIn('adbc-driver-manager', str(ctx.exception))
 
 
 class TestBuildUri(unittest.TestCase):
@@ -80,28 +61,16 @@ class TestConnectAndStreamRecordBatches(unittest.TestCase):
     def test_connect_closes_connection_on_normal_exit(self):
         fake_conn = mock.MagicMock()
 
-        with mock.patch.object(adbc, '_import_adbc', return_value=self._make_fake_adbc_dbapi(fake_conn)):
+        with mock.patch.object(adbc.dbapi, 'connect', return_value=fake_conn):
             with adbc.connect({'host': 'h', 'port': 3306, 'user': 'u', 'password': 'p'}) as conn:
                 self.assertIs(conn, fake_conn)
 
         fake_conn.close.assert_called_once()
 
-    def test_connect_relaxes_zero_date_sql_mode(self):
-        fake_cursor = mock.MagicMock()
-        fake_cursor.__enter__.return_value = fake_cursor
-        fake_conn = mock.MagicMock()
-        fake_conn.cursor.return_value = fake_cursor
-
-        with mock.patch.object(adbc, '_import_adbc', return_value=self._make_fake_adbc_dbapi(fake_conn)):
-            with adbc.connect({'host': 'h', 'port': 3306, 'user': 'u', 'password': 'p'}):
-                pass
-
-        fake_cursor.execute.assert_called_once_with(adbc._RELAX_ZERO_DATE_SQL)
-
     def test_connect_closes_connection_when_body_raises(self):
         fake_conn = mock.MagicMock()
 
-        with mock.patch.object(adbc, '_import_adbc', return_value=self._make_fake_adbc_dbapi(fake_conn)):
+        with mock.patch.object(adbc.dbapi, 'connect', return_value=fake_conn):
             with self.assertRaises(RuntimeError):
                 with adbc.connect({'host': 'h', 'port': 3306, 'user': 'u', 'password': 'p'}):
                     raise RuntimeError('boom')
@@ -117,13 +86,12 @@ class TestConnectAndStreamRecordBatches(unittest.TestCase):
         fake_conn = mock.MagicMock()
         fake_conn.cursor.return_value = fake_cursor
 
-        with mock.patch.object(adbc, '_import_adbc', return_value=self._make_fake_adbc_dbapi(fake_conn)):
+        with mock.patch.object(adbc.dbapi, 'connect', return_value=fake_conn):
             with adbc.stream_record_batches({'host': 'h', 'port': 3306, 'user': 'u', 'password': 'p'},
                                             'SELECT * FROM t WHERE x >= %(x)s', {'x': 1}) as reader:
                 self.assertIs(reader, fake_reader)
 
-        # first call relaxes sql_mode (from connect()), second runs the translated qmark query
-        fake_cursor.execute.assert_any_call(adbc._RELAX_ZERO_DATE_SQL)
+        # runs the translated qmark query
         fake_cursor.execute.assert_called_with('SELECT * FROM t WHERE x >= ?', [1])
         fake_conn.close.assert_called_once()
 
@@ -131,19 +99,15 @@ class TestConnectAndStreamRecordBatches(unittest.TestCase):
 class TestRequireArrowSupport(unittest.TestCase):
 
     def test_wraps_driver_load_failure(self):
-        with mock.patch.object(adbc, '_import_adbc'):
-            with mock.patch('adbc_driver_manager.AdbcDatabase',
-                            side_effect=Exception("NOT_FOUND: could not load driver")):
-                with self.assertRaises(adbc.ArrowSupportError) as ctx:
-                    adbc.require_arrow_support()
+        with mock.patch.object(
+            adbc,
+            "AdbcDatabase",
+            side_effect=Exception("NOT_FOUND: could not load driver"),
+        ):
+            with self.assertRaises(adbc.ArrowSupportError) as ctx:
+                adbc.require_arrow_support()
 
         self.assertIn('dbc install mysql', str(ctx.exception))
-
-    def test_missing_uri_option_error_means_driver_loaded_successfully(self):
-        with mock.patch.object(adbc, '_import_adbc'):
-            with mock.patch('adbc_driver_manager.AdbcDatabase',
-                            side_effect=Exception("INVALID_ARGUMENT: missing required option uri")):
-                adbc.require_arrow_support()  # should not raise
 
 
 if __name__ == '__main__':

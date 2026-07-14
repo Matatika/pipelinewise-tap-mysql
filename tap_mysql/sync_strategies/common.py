@@ -82,7 +82,7 @@ def get_database_name(catalog_entry):
     return md_map.get((), {}).get('database-name')
 
 
-def generate_select_sql(catalog_entry, columns, null_invalid_dates: bool = False):
+def generate_select_sql(catalog_entry, columns):
     database_name = get_database_name(catalog_entry)
     escaped_db = escape(database_name)
     escaped_table = escape(catalog_entry.table)
@@ -103,24 +103,6 @@ def generate_select_sql(catalog_entry, columns, null_invalid_dates: bool = False
         elif property_format == 'spatial':
             escaped_columns.append(
                 f'ST_AsGeoJSON({escaped_col}) as {escaped_col}')
-
-        # TODO: Remove this once the ADBC driver handles zero-dates properly
-        # https://github.com/adbc-drivers/mysql/issues/114
-        elif null_invalid_dates and property_format == 'date-time':
-            # MySQL allows storing invalid zero-dates (e.g. 0000-00-00), which the Arrow/ADBC
-            # driver's date parser rejects outright. NULLIF-ing them out in SQL turns them into
-            # NULL before they reach the driver. The outer CAST is required too: MySQL's NULLIF
-            # returns a string-typed result when comparing a DATETIME column against a string
-            # literal, which would otherwise silently degrade the Arrow column from a native
-            # timestamp to a plain string (and, for the mysql-connector/JSONL path, would make
-            # row_to_singer_record's isinstance(elem, datetime.datetime) check miss entirely).
-            # This is opt-in (not applied for the default mysql-connector path) because it also
-            # requires relaxing NO_ZERO_DATE/NO_ZERO_IN_DATE in sql_mode (see adbc.py) - MySQL
-            # rejects the '0000-00-00' literal at parse time under the default strict sql_mode,
-            # even though it's never actually returned.
-            escaped_columns.append(
-                "CAST(NULLIF(NULLIF("
-                f"{escaped_col}, '0000-00-00'), '0000-00-00 00:00:00') AS DATETIME) as {escaped_col}")
         else:
             escaped_columns.append(escaped_col)
 
