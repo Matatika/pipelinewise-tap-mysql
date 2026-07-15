@@ -516,17 +516,34 @@ This invocation extracts any data since (and including) the
 
 ## To run tests:
 
-1. You'll need to have a running MySQL or MariaDB server to run the tests. Run the following SQL commands as a privileged user to create the required objects:
-```
-CREATE USER <mysql-user> IDENTIFIED BY '<mysql-password>';
-CREATE DATABASE tap_mysql_test;
-GRANT ALL PRIVILEGES ON tap_mysql_test.* TO <mysql-user>;
+The integration tests use [testcontainers](https://testcontainers-python.readthedocs.io/) to spin up a
+throwaway MySQL or MariaDB server automatically, so the only requirement is a running Docker daemon.
+
+1. Install python dependencies in a virtual env:
+
+```bash
+make venv
 ```
 
-**Note**: The user and password can be anything but the database name needs to be `tap_mysql_test`.
+2. Run the tests:
 
-2. Define the environment variables that are required to run the tests:
+```bash
+make unit_test
+make integration_test
 ```
+
+By default the integration tests run against MySQL. Set `TAP_MYSQL_ENGINE=mariadb` to run them
+against MariaDB instead:
+
+```bash
+TAP_MYSQL_ENGINE=mariadb make integration_test
+```
+
+To run the integration tests against an externally managed server instead of a testcontainers-managed
+one, set `TAP_MYSQL_EXTERNAL=1` and describe the connection with environment variables:
+
+```
+  export TAP_MYSQL_EXTERNAL=1
   export TAP_MYSQL_HOST=<mysql-host>
   export TAP_MYSQL_PORT=<mysql-port>
   export TAP_MYSQL_USER=<mysql-user>
@@ -534,29 +551,13 @@ GRANT ALL PRIVILEGES ON tap_mysql_test.* TO <mysql-user>;
   export TAP_MYSQL_ENGINE=<engine>
 ```
 
-3. Install python test dependencies in a virtual env
+The user needs `ALL PRIVILEGES` on the `tap_mysql_test` database (which is dropped and recreated by the
+tests) as well as `REPLICATION CLIENT` and `REPLICATION SLAVE` globally.
+
+### To run the linter:
 
 ```bash
-python3 -m venv venv
-. venv/bin/activate
-pip install --upgrade pip
-pip install .[test]
-```
-
-4. To run tests:
-```bash
-nosetests -c .noserc tests
-```
-
-### To run pylint:
-
-1. Install python dependencies and run python linter
-```
-  python3 -m venv venv
-  . venv/bin/activate
-  pip install --upgrade pip
-  pip install .[test]
-  pylint --rcfile .pylintrc tap_mysql
+make lint
 ```
 
 ---
