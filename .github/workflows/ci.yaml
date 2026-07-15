@@ -42,7 +42,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -59,12 +59,15 @@ jobs:
         run: make unit_test
 
 
-  integration_test_mariadb:
-    name: Intergation tests with MariaDB database
+  integration_test:
+    name: Integration tests with ${{ matrix.engine }} database
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        engine:
+        - mariadb
+        - mysql
         python-version:
         - "3.10"
         - "3.11"
@@ -78,16 +81,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build db test container
-        run: docker compose up -d mariadb_server1 --wait
-
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -99,64 +99,6 @@ jobs:
 
       - name: Integration Tests
         env:
-          TAP_MYSQL_PORT: 3306
-          TAP_MYSQL_USER: replication_user
-          TAP_MYSQL_PASSWORD: secret123passwd
-          TAP_MYSQL_HOST: localhost
-          TAP_MYSQL_ENGINE: mariadb
+          TAP_MYSQL_ENGINE: ${{ matrix.engine }}
           LOGGING_CONF_FILE: ./sample_logging.conf
         run: make integration_test extra_args=--cov-fail-under=80
-
-      - name: Shutdown db test container
-        run: docker compose down
-
-  integration_test_mysql:
-    name: Integration tests with Mysql database
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version:
-        - "3.10"
-        - "3.11"
-        - "3.12"
-        - "3.13"
-        - "3.14"
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Build db test container
-        run: docker compose up -d mysql_server --wait
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Setup virtual environment
-        run: make venv
-
-      - name: Install ADBC driver
-        run: make dbc
-
-      - name: Integration Tests
-        env:
-          TAP_MYSQL_PORT: 3307
-          TAP_MYSQL_USER: replication_user
-          TAP_MYSQL_PASSWORD: secret123passwd
-          TAP_MYSQL_HOST: localhost
-          TAP_MYSQL_ENGINE: mysql
-          LOGGING_CONF_FILE: ./sample_logging.conf
-        run: make integration_test extra_args=--cov-fail-under=80
-
-      - name: Shutdown db test container
-        run: docker compose down
