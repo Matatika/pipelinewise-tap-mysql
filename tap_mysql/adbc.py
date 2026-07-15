@@ -32,9 +32,7 @@ LOGGER = singer.get_logger('tap_mysql')
 # strict sql_mode, even when it's wrapped in NULLIF and never actually returned. Only the two
 # zero-date-related flags are removed, leaving the rest of sql_mode (and any DML-time
 # protections, though this connection is read-only) untouched.
-_RELAX_ZERO_DATE_SQL = (
-    "SET SESSION sql_mode = REPLACE(REPLACE(@@sql_mode, 'NO_ZERO_DATE', ''), 'NO_ZERO_IN_DATE', '')"
-)
+_RELAX_ZERO_DATE_SQL = "SET SESSION sql_mode = REPLACE(REPLACE(@@sql_mode, 'NO_ZERO_DATE', ''), 'NO_ZERO_IN_DATE', '')"
 
 _NAMED_PARAM_RE = re.compile(r'%\((\w+)\)s')
 
@@ -60,10 +58,10 @@ def require_arrow_support() -> None:
         if 'uri' in str(exc).lower():
             return
         raise ArrowSupportError(
-            "Arrow BATCH mode is configured but the native MySQL ADBC driver could not "
-            "be loaded. The MySQL ADBC driver itself is missing. Install it with "
-            "`dbc install mysql` (see https://docs.adbc-drivers.org/drivers/mysql/). "
-            f"Underlying error: {exc}"
+            'Arrow BATCH mode is configured but the native MySQL ADBC driver could not '
+            'be loaded. The MySQL ADBC driver itself is missing. Install it with '
+            '`dbc install mysql` (see https://docs.adbc-drivers.org/drivers/mysql/). '
+            f'Underlying error: {exc}'
         ) from exc
     else:
         db.close()
@@ -128,7 +126,7 @@ def connect(config: dict):
         conn_kwargs={
             # https://github.com/adbc-drivers/mysql/issues/114
             # https://github.com/adbc-drivers/mysql/pull/116
-            'mysql.query.zero_datetime_behavior': 'convert_to_null',
+            'mysql.query.zero_datetime_behavior': 'convert_to_null'
         },
         autocommit=True,
     )
@@ -157,4 +155,5 @@ def get_retryable_exceptions() -> tuple:
     as mysql.connector.errors.OperationalError does today. Lazily imported so callers
     (full_table.py/incremental.py) don't need an unconditional top-level ADBC import."""
     from adbc_driver_manager import OperationalError
+
     return (OperationalError,)

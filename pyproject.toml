@@ -17,26 +17,28 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "pipelinewise-singer-python==1.*",
-    "mysql-replication==0.43",
-    "mysql-connector-python==9.7.0",
-    "plpygis==0.6.1",
-    "cryptography",
-    "orjson",
-    "tzlocal==5.3.1",
-    "pyarrow>=17",
     "adbc-driver-manager>=0.11",
     'backports-datetime-fromisoformat>=2.0.1; python_version<"3.11"',
+    "cryptography",
+    "meltano-singer-python~=0.55.0",
+    "mysql-replication==0.43",
+    "mysql-connector-python==9.7.0",
+    "orjson",
+    "plpygis==0.6.1",
+    "pyarrow>=17",
+    "python-backoff>=2.3.1",
+    "setuptools>=83.0.0",
+    "tzlocal==5.3.1",
 ]
 
 [dependency-groups]
 dev = [
+    "pyarrow-stubs>=20.0.0.20260625",
     "pytest",
     "pytest-cov",
+    "python-dotenv",
     "ruff",
     "testcontainers>=4.15.0rc4",
-    "python-dotenv",
-    "pyarrow-stubs>=20.0.0.20260625",
 ]
 
 [project.urls]
@@ -65,6 +67,9 @@ show_missing = true
 line-length = 120
 target-version = "py310"
 
+[tool.ruff.format]
+quote-style = "single"
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "TID"]
 ignore = [
@@ -73,3 +78,6 @@ ignore = [
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "singer.write_message".msg = "Use tap_mysql.stream_utils.write_message instead"
+
+[tool.uv.sources]
+meltano-singer-python = { git = "https://github.com/meltano/sdk.git", subdirectory = "packages/meltano-singer-python", rev = "singer-python-package" }

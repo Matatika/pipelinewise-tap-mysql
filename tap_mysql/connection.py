@@ -21,16 +21,17 @@ MATCH_HOSTNAME = getattr(ssl, 'match_hostname', None)
 MARIADB_ENGINE = 'mariadb'
 MYSQL_ENGINE = 'mysql'
 
-DEFAULT_SESSION_SQLS = ['SET @@session.time_zone="+0:00"',
-                        'SET @@session.wait_timeout=28800',
-                        'SET @@session.net_read_timeout=3600',
-                        'SET @@session.innodb_lock_wait_timeout=3600']
+DEFAULT_SESSION_SQLS = [
+    'SET @@session.time_zone="+0:00"',
+    'SET @@session.wait_timeout=28800',
+    'SET @@session.net_read_timeout=3600',
+    'SET @@session.innodb_lock_wait_timeout=3600',
+]
 
 
-@backoff.on_exception(backoff.expo,
-                      (mysql.connector.errors.OperationalError, pymysql.err.OperationalError),
-                      max_tries=5,
-                      factor=2)
+@backoff.on_exception(
+    backoff.expo, (mysql.connector.errors.OperationalError, pymysql.err.OperationalError), max_tries=5, factor=2
+)
 def connect_with_backoff(connection):
     connection.connect()
     run_session_sqls(connection)
@@ -62,11 +63,11 @@ def run_sql(connection, sql):
 
 def parse_internal_hostname(hostname):
     # special handling for google cloud
-    if ":" in hostname:
-        parts = hostname.split(":")
+    if ':' in hostname:
+        parts = hostname.split(':')
         if len(parts) == 3:
-            return parts[0] + ":" + parts[2]
-        return parts[0] + ":" + parts[1]
+            return parts[0] + ':' + parts[2]
+        return parts[0] + ':' + parts[1]
 
     return hostname
 
@@ -143,7 +144,7 @@ class MySQLConnection:
         self._conn.commit()
 
     def get_server_info(self) -> str:
-        return ".".join(str(v) for v in self._conn.server_version)
+        return '.'.join(str(v) for v in self._conn.server_version)
 
     def cursor(self, buffered=False):
         return self._conn.cursor(buffered=buffered)
@@ -239,7 +240,7 @@ def fetch_server_id(mysql_conn: MySQLConnection) -> int:
     """
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
-            cur.execute("SELECT @@server_id")
+            cur.execute('SELECT @@server_id')
             server_id = cur.fetchone()[0]
 
             return server_id
@@ -255,7 +256,7 @@ def fetch_server_uuid(mysql_conn: MySQLConnection) -> str:
     """
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
-            cur.execute("SELECT @@server_uuid")
+            cur.execute('SELECT @@server_uuid')
             server_uuid = cur.fetchone()[0]
 
             return server_uuid

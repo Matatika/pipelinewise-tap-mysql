@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
+import singer
 
 import tap_mysql
 from tap_mysql import adbc
@@ -49,8 +50,10 @@ class TestArrowBatchFullTable(unittest.TestCase):
     def setUp(self):
         self.conn = test_utils.get_test_connection()
         self.singer_messages = []
-        self._write_message_patcher = patch('tap_mysql.stream_utils.write_message',
-                                            side_effect=self.singer_messages.append)
+        self._write_message_patcher = patch(
+            'tap_mysql.stream_utils.write_message',
+            side_effect=self.singer_messages.append,
+        )
         self._write_message_patcher.start()
 
         with connect_with_backoff(self.conn) as open_conn:
@@ -58,32 +61,45 @@ class TestArrowBatchFullTable(unittest.TestCase):
                 cursor.execute(
                     'CREATE TABLE arrow_full ('
                     'id int primary key, name varchar(100), created_at datetime, '
-                    'is_active tinyint(1), is_bit bit(1))')
+                    'is_active tinyint(1), is_bit bit(1))'
+                )
                 cursor.execute(
-                    "INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) "
-                    "VALUES (1, 'a', '2020-01-01 00:00:00', 0, 0)")
+                    'INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) '
+                    "VALUES (1, 'a', '2020-01-01 00:00:00', 0, 0)"
+                )
                 cursor.execute(
-                    "INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) "
-                    "VALUES (2, 'b', '2020-01-02 00:00:00', 1, 1)")
+                    'INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) '
+                    "VALUES (2, 'b', '2020-01-02 00:00:00', 1, 1)"
+                )
                 cursor.execute(
-                    "INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) "
-                    "VALUES (3, 'c', '2020-01-03 00:00:00', 1, 0)")
+                    'INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) '
+                    "VALUES (3, 'c', '2020-01-03 00:00:00', 1, 0)"
+                )
                 cursor.execute("SET SESSION sql_mode=''")
                 cursor.execute(
-                    "INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) "
-                    "VALUES (4, 'd', '0000-00-00 00:00:00', NULL, NULL)")
+                    'INSERT INTO arrow_full (id, name, created_at, is_active, is_bit) '
+                    "VALUES (4, 'd', '0000-00-00 00:00:00', NULL, NULL)"
+                )
 
-        self.catalog = test_utils.discover_catalog(self.conn, {})
+        self.catalog = test_utils.discover_catalog(self.conn)
         for stream in self.catalog.streams:
-            stream.metadata = [
-                {'breadcrumb': (), 'metadata': {'selected': True, 'table-key-properties': ['id'],
-                                                'database-name': 'tap_mysql_test'}},
-                {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'name'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'created_at'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'is_active'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'is_bit'), 'metadata': {'selected': True}},
-            ]
+            stream.metadata = singer.MetadataMapping.from_iterable(
+                [
+                    {
+                        'breadcrumb': (),
+                        'metadata': {
+                            'selected': True,
+                            'table-key-properties': ['id'],
+                            'database-name': 'tap_mysql_test',
+                        },
+                    },
+                    {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'name'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'created_at'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'is_active'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'is_bit'), 'metadata': {'selected': True}},
+                ]
+            )
             test_utils.set_replication_method_and_key(stream, 'FULL_TABLE', None)
 
     def tearDown(self):
@@ -93,13 +109,12 @@ class TestArrowBatchFullTable(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                tap_mysql.do_sync(self.conn, {
-                    'batch_config': {
-                        'encoding': {'format': 'arrow'},
-                        'storage': {'root': tmpdir},
-                        'batch_size': 2,
-                    },
-                }, self.catalog, {})
+                tap_mysql.do_sync(
+                    self.conn,
+                    {'batch_config': {'encoding': {'format': 'arrow'}, 'storage': {'root': tmpdir}, 'batch_size': 2}},
+                    self.catalog,
+                    {},
+                )
 
             batch_messages = _read_batch_messages(out.getvalue())
             # batch_size_rows is a flush threshold, not an exact chunk size: the driver may
@@ -116,11 +131,12 @@ class TestArrowBatchFullTable(unittest.TestCase):
                 self.assertEqual(table.column('is_active').type, pa.bool_())
                 self.assertEqual(table.column('is_bit').type, pa.bool_())
                 for id_, name, created_at, is_active, is_bit in zip(
-                        table.column('id').to_pylist(),
-                        table.column('name').to_pylist(),
-                        table.column('created_at').to_pylist(),
-                        table.column('is_active').to_pylist(),
-                        table.column('is_bit').to_pylist()):
+                    table.column('id').to_pylist(),
+                    table.column('name').to_pylist(),
+                    table.column('created_at').to_pylist(),
+                    table.column('is_active').to_pylist(),
+                    table.column('is_bit').to_pylist(),
+                ):
                     rows_by_id[id_] = (name, created_at, is_active, is_bit)
 
         self.assertEqual(sorted(rows_by_id), [1, 2, 3, 4])
@@ -146,12 +162,12 @@ class TestArrowBatchFullTable(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                tap_mysql.do_sync(self.conn, {
-                    'batch_config': {
-                        'encoding': {'format': 'arrow'},
-                        'storage': {'root': tmpdir},
-                    },
-                }, self.catalog, {})
+                tap_mysql.do_sync(
+                    self.conn,
+                    {'batch_config': {'encoding': {'format': 'arrow'}, 'storage': {'root': tmpdir}}},
+                    self.catalog,
+                    {},
+                )
 
             batch_messages = _read_batch_messages(out.getvalue())
             self.assertEqual(len(batch_messages), 1)
@@ -181,14 +197,18 @@ class TestArrowBatchIncremental(unittest.TestCase):
                 cursor.execute("INSERT INTO arrow_incremental (id, updated) VALUES (2, '2020-01-02 00:00:00')")
                 cursor.execute("INSERT INTO arrow_incremental (id, updated) VALUES (3, '2020-01-03 00:00:00')")
 
-        self.catalog = test_utils.discover_catalog(self.conn, {})
+        self.catalog = test_utils.discover_catalog(self.conn)
         for stream in self.catalog.streams:
-            stream.metadata = [
-                {'breadcrumb': (), 'metadata': {'selected': True, 'table-key-properties': [],
-                                                'database-name': 'tap_mysql_test'}},
-                {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'updated'), 'metadata': {'selected': True}},
-            ]
+            stream.metadata = singer.MetadataMapping.from_iterable(
+                [
+                    {
+                        'breadcrumb': (),
+                        'metadata': {'selected': True, 'table-key-properties': [], 'database-name': 'tap_mysql_test'},
+                    },
+                    {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'updated'), 'metadata': {'selected': True}},
+                ]
+            )
             stream.stream = stream.table
             test_utils.set_replication_method_and_key(stream, 'INCREMENTAL', 'updated')
 
@@ -201,20 +221,19 @@ class TestArrowBatchIncremental(unittest.TestCase):
                 'tap_mysql_test-arrow_incremental': {
                     'replication_key': 'updated',
                     'replication_key_value': '2020-01-02 00:00:00',
-                },
-            },
+                }
+            }
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                tap_mysql.do_sync(self.conn, {
-                    'batch_config': {
-                        'encoding': {'format': 'arrow'},
-                        'storage': {'root': tmpdir},
-                        'batch_size': 10,
-                    },
-                }, self.catalog, state)
+                tap_mysql.do_sync(
+                    self.conn,
+                    {'batch_config': {'encoding': {'format': 'arrow'}, 'storage': {'root': tmpdir}, 'batch_size': 10}},
+                    self.catalog,
+                    state,
+                )
 
             batch_messages = _read_batch_messages(out.getvalue())
             self.assertEqual(len(batch_messages), 1)

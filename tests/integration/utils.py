@@ -2,7 +2,6 @@ import os
 
 import pymysql
 import singer
-import singer.metadata
 
 import tap_mysql
 import tap_mysql.sync_strategies.common as common
@@ -12,11 +11,13 @@ DB_NAME = 'tap_mysql_test'
 
 
 def get_db_config():
-    config = {'host': os.environ['TAP_MYSQL_HOST'],
-              'port': int(os.environ['TAP_MYSQL_PORT']),
-              'user': os.environ['TAP_MYSQL_USER'],
-              'password': os.environ['TAP_MYSQL_PASSWORD'],
-              'charset': 'utf8'}
+    config = {
+        'host': os.environ['TAP_MYSQL_HOST'],
+        'port': int(os.environ['TAP_MYSQL_PORT']),
+        'user': os.environ['TAP_MYSQL_USER'],
+        'password': os.environ['TAP_MYSQL_PASSWORD'],
+        'charset': 'utf8',
+    }
     if not config['password']:
         del config['password']
 
@@ -49,38 +50,24 @@ def get_test_connection(extra_config=None):
     return mysql_conn
 
 
-def discover_catalog(connection, catalog):
-    catalog = tap_mysql.discover_catalog(connection, catalog.get('filter_dbs'))
-    streams = []
+def discover_catalog(connection) -> singer.Catalog:
+    catalog = tap_mysql.discover_catalog(connection)
+    streams = [stream for stream in catalog.streams if common.get_database_name(stream) == DB_NAME]
 
-    for stream in catalog.streams:
-        database_name = common.get_database_name(stream)
-
-        if database_name == DB_NAME:
-            streams.append(stream)
-
-    catalog.streams = streams
-
-    return catalog
+    return singer.Catalog.from_entries(streams)
 
 
 def set_replication_method_and_key(stream, r_method, r_key):
-    new_md = singer.metadata.to_map(stream.metadata)
-    old_md = new_md.get(())
+    root = stream.metadata.root
     if r_method:
-        old_md.update({'replication-method': r_method})
+        root.replication_method = r_method
 
     if r_key:
-        old_md.update({'replication-key': r_key})
+        root.replication_key = r_key
 
-    stream.metadata = singer.metadata.to_list(new_md)
     return stream
 
 
 def set_selected(stream, selected=False):
-    new_md = singer.metadata.to_map(stream.metadata)
-    old_md = new_md.get(())
-    old_md.update({'selected': selected})
-
-    stream.metadata = singer.metadata.to_list(new_md)
+    stream.metadata.root.selected = selected
     return stream

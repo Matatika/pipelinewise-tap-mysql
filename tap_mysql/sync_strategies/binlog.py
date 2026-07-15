@@ -9,43 +9,32 @@ import socket
 from typing import Any, Dict, Optional, Set, Tuple, Union
 
 import mysql.connector.errors
-import pytz
 import singer
 import tzlocal
 from plpygis import Geometry
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.constants import FIELD_TYPE
 from pymysqlreplication.event import GtidEvent, MariadbGtidEvent, RotateEvent
-from pymysqlreplication.row_event import (
-    DeleteRowsEvent,
-    UpdateRowsEvent,
-    WriteRowsEvent,
-)
-from singer import Schema, metadata, utils
+from pymysqlreplication.row_event import DeleteRowsEvent, UpdateRowsEvent, WriteRowsEvent
+from singer import RecordMessage, Schema, utils
 
 from tap_mysql import connection, stream_utils
 from tap_mysql.connection import MySQLConnection, connect_with_backoff, make_connection_wrapper
 from tap_mysql.discover_utils import desired_columns, discover_catalog, should_run_discovery
-from tap_mysql.stream_utils import FastRecordMessage, write_schema_message
+from tap_mysql.stream_utils import write_schema_message
 from tap_mysql.sync_strategies import common
 
 LOGGER = singer.get_logger('tap_mysql')
 
-SDC_DELETED_AT = "_sdc_deleted_at"
+SDC_DELETED_AT = '_sdc_deleted_at'
 UPDATE_BOOKMARK_PERIOD = 1000
 BOOKMARK_KEYS = {'log_file', 'log_pos', 'version', 'gtid'}
 
-MYSQL_TIMESTAMP_TYPES = {
-    FIELD_TYPE.TIMESTAMP,
-    FIELD_TYPE.TIMESTAMP2
-}
+MYSQL_TIMESTAMP_TYPES = {FIELD_TYPE.TIMESTAMP, FIELD_TYPE.TIMESTAMP2}
 
 
 def add_automatic_properties(catalog_entry, columns):
-    catalog_entry.schema.properties[SDC_DELETED_AT] = Schema(
-        type=["null", "string"],
-        format="date-time"
-    )
+    catalog_entry.schema.properties[SDC_DELETED_AT] = Schema(type=['null', 'string'], format='date-time')
 
     columns.append(SDC_DELETED_AT)
 
@@ -55,26 +44,31 @@ def add_automatic_properties(catalog_entry, columns):
 def verify_binlog_config(mysql_conn):
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
-            cur.execute("SELECT  @@binlog_format")
+            cur.execute('SELECT  @@binlog_format')
             binlog_format = cur.fetchone()[0]
 
             if binlog_format != 'ROW':
-                raise Exception(f"Unable to replicate binlog stream because binlog_format is "
-                                f"not set to 'ROW': {binlog_format}.")
+                raise Exception(
+                    f"Unable to replicate binlog stream because binlog_format is not set to 'ROW': {binlog_format}."
+                )
 
             try:
-                cur.execute("SELECT  @@binlog_row_image")
+                cur.execute('SELECT  @@binlog_row_image')
                 binlog_row_image = cur.fetchone()[0]
             except mysql.connector.errors.InternalError as ex:
                 if ex.errno == 1193:
-                    raise Exception("Unable to replicate binlog stream because binlog_row_image "
-                                    "system variable does not exist. MySQL version must be at "
-                                    "least 5.6.2 to use binlog replication.") from ex
+                    raise Exception(
+                        'Unable to replicate binlog stream because binlog_row_image '
+                        'system variable does not exist. MySQL version must be at '
+                        'least 5.6.2 to use binlog replication.'
+                    ) from ex
                 raise ex
 
             if binlog_row_image != 'FULL':
-                raise Exception(f"Unable to replicate binlog stream because binlog_row_image is "
-                                f"not set to 'FULL': {binlog_row_image}.")
+                raise Exception(
+                    f'Unable to replicate binlog stream because binlog_row_image is '
+                    f"not set to 'FULL': {binlog_row_image}."
+                )
 
 
 def verify_gtid_config(mysql_conn: MySQLConnection):
@@ -87,7 +81,7 @@ def verify_gtid_config(mysql_conn: MySQLConnection):
     """
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
-            cur.execute("select @@gtid_mode;")
+            cur.execute('select @@gtid_mode;')
             binlog_format = cur.fetchone()[0]
 
             if binlog_format != 'ON':
@@ -100,25 +94,22 @@ def fetch_current_log_file_and_pos(mysql_conn):
         server_version = open_conn.get_server_info()
 
         with open_conn.cursor() as cur:
-            if server_version < "8.4":
-                cur.execute("SHOW MASTER STATUS")
+            if server_version < '8.4':
+                cur.execute('SHOW MASTER STATUS')
             else:
-                cur.execute("SHOW BINARY LOG STATUS")
+                cur.execute('SHOW BINARY LOG STATUS')
 
             result = cur.fetchone()
 
             if result is None:
-                raise Exception("MySQL binary logging is not enabled.")
+                raise Exception('MySQL binary logging is not enabled.')
 
             current_log_file, current_log_pos = result[0:2]
 
             return current_log_file, current_log_pos
 
 
-def fetch_current_gtid_pos(
-        mysql_conn: MySQLConnection,
-        engine: str
-) -> str:
+def fetch_current_gtid_pos(mysql_conn: MySQLConnection, engine: str) -> str:
     """
     Find the given server's current GTID position.
 
@@ -139,7 +130,6 @@ def fetch_current_gtid_pos(
 
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
-
             if engine != connection.MARIADB_ENGINE:
                 cur.execute('select @@GLOBAL.gtid_executed;')
             else:
@@ -148,7 +138,7 @@ def fetch_current_gtid_pos(
             result = cur.fetchone()
 
             if result is None:
-                raise Exception("GTID is not present on this server!")
+                raise Exception('GTID is not present on this server!')
 
             gtids = result[0]
             LOGGER.debug('Found GTID(s): %s in server %s', gtids, server)
@@ -219,7 +209,7 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
                 # -L145
                 timezone = tzlocal.get_localzone()
                 local_datetime = val.replace(tzinfo=timezone)
-                utc_datetime = local_datetime.astimezone(pytz.UTC)
+                utc_datetime = local_datetime.astimezone(datetime.timezone.utc)
                 row_to_persist[column_name] = utc_datetime.isoformat()
             else:
                 row_to_persist[column_name] = val.isoformat() + '+00:00'
@@ -269,18 +259,16 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
         else:
             row_to_persist[column_name] = val
 
-    return FastRecordMessage(
+    return RecordMessage(
         stream=catalog_entry.stream,
         record=row_to_persist,
         version=version,
-        time_extracted_str=time_extracted)
+        time_extracted=time_extracted,
+    )
 
 
 def calculate_gtid_bookmark(
-        mysql_conn: MySQLConnection,
-        binlog_streams_map: Dict[str, Any],
-        state: Dict,
-        engine: str
+    mysql_conn: MySQLConnection, binlog_streams_map: Dict[str, Any], state: Dict, engine: str
 ) -> str:
     """
     Finds the earliest bookmarked gtid in the state
@@ -319,7 +307,6 @@ def calculate_gtid_bookmark(
                 min_gtid = gtid
 
     if not min_gtid:
-
         # Mariadb has a handy sql function BINLOG_GTID_POS to infer the gtid position from given binlog coordinates so
         # we will use that, as for mysql, there is no such thing, the only available option is using the cli utility
         # mysqlbinlog which we deemed as not nice to use, and we don't wanna make it a system requirement of this tap,
@@ -332,18 +319,18 @@ def calculate_gtid_bookmark(
         log_file, log_pos = calculate_bookmark(mysql_conn, binlog_streams_map, state)
 
         if not (log_file and log_pos):
-            raise Exception("No binlog coordinates in state to infer gtid position! Cannot resume logical replication")
+            raise Exception('No binlog coordinates in state to infer gtid position! Cannot resume logical replication')
 
         min_gtid = _find_gtid_by_binlog_coordinates(mysql_conn, log_file, log_pos)
 
         if not min_gtid:
             raise Exception("Couldn't infer any gtid from binlog coordinates to resume logical replication")
 
-        LOGGER.info('The inferred GTID is "%s", it will be used to resume replication',
-                    min_gtid)
+        LOGGER.info('The inferred GTID is "%s", it will be used to resume replication', min_gtid)
     else:
-        LOGGER.info('The earliest bookmarked GTID found in the state is "%s", and will be used to resume replication',
-                    min_gtid)
+        LOGGER.info(
+            'The earliest bookmarked GTID found in the state is "%s", and will be used to resume replication', min_gtid
+        )
 
     return min_gtid
 
@@ -398,10 +385,7 @@ def get_min_log_pos_per_log_file(binlog_streams_map, state) -> Dict[str, Dict]:
         log_pos = bookmark.get('log_pos')
 
         if not min_log_pos_per_file.get(log_file):
-            min_log_pos_per_file[log_file] = {
-                'log_pos': log_pos,
-                'streams': [tap_stream_id]
-            }
+            min_log_pos_per_file[log_file] = {'log_pos': log_pos, 'streams': [tap_stream_id]}
 
         elif min_log_pos_per_file[log_file]['log_pos'] > log_pos:
             min_log_pos_per_file[log_file]['log_pos'] = log_pos
@@ -418,7 +402,7 @@ def calculate_bookmark(mysql_conn, binlog_streams_map, state) -> Tuple[str, int]
 
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
-            cur.execute("SHOW BINARY LOGS")
+            cur.execute('SHOW BINARY LOGS')
 
             binary_logs = cur.fetchall()
 
@@ -428,22 +412,19 @@ def calculate_bookmark(mysql_conn, binlog_streams_map, state) -> Tuple[str, int]
                 expired_logs = state_logs_set.difference(server_logs_set)
 
                 if expired_logs:
-                    raise Exception('Unable to replicate binlog stream because the following binary log(s) no longer '
-                                    f'exist: {", ".join(expired_logs)}')
+                    raise Exception(
+                        'Unable to replicate binlog stream because the following binary log(s) no longer '
+                        f'exist: {", ".join(expired_logs)}'
+                    )
 
                 for log_file in sorted(server_logs_set):
                     if min_log_pos_per_file.get(log_file):
                         return log_file, min_log_pos_per_file[log_file]['log_pos']
 
-            raise Exception("Unable to replicate binlog stream because no binary logs exist on the server.")
+            raise Exception('Unable to replicate binlog stream because no binary logs exist on the server.')
 
 
-def update_bookmarks(
-        state: Dict,
-        binlog_streams_map: Dict,
-        log_file: str,
-        log_pos: int,
-        gtid: Optional[str]) -> Dict:
+def update_bookmarks(state: Dict, binlog_streams_map: Dict, log_file: str, log_pos: int, gtid: Optional[str]) -> Dict:
     """
     Updates the state bookmarks with the given binlog file & position or GTID
     Args:
@@ -458,26 +439,19 @@ def update_bookmarks(
     LOGGER.debug('Updating state bookmark to binlog file and pos and GTID: %s, %d, %s', log_file, log_pos, gtid)
 
     if log_file and not log_pos:
-        raise ValueError("binlog_file is present but binlog_pos is null! Please provide a binlog position "
-                         "to properly update the state")
+        raise ValueError(
+            'binlog_file is present but binlog_pos is null! Please provide a binlog position '
+            'to properly update the state'
+        )
 
     for tap_stream_id in binlog_streams_map.keys():
-        state = singer.write_bookmark(state,
-                                      tap_stream_id,
-                                      'log_file',
-                                      log_file)
+        state = singer.write_bookmark(state, tap_stream_id, 'log_file', log_file)
 
-        state = singer.write_bookmark(state,
-                                      tap_stream_id,
-                                      'log_pos',
-                                      log_pos)
+        state = singer.write_bookmark(state, tap_stream_id, 'log_pos', log_pos)
 
         # update gtid only if it's not null
         if gtid:
-            state = singer.write_bookmark(state,
-                                          tap_stream_id,
-                                          'gtid',
-                                          gtid)
+            state = singer.write_bookmark(state, tap_stream_id, 'gtid', gtid)
 
     return state
 
@@ -491,14 +465,15 @@ def handle_write_rows_event(event, catalog_entry, state, columns, rows_saved, ti
     db_column_types = get_db_column_types(event)
 
     for row in event.rows:
-        filtered_vals = {k: v for k, v in row['values'].items()
-                         if k in columns}
+        filtered_vals = {k: v for k, v in row['values'].items() if k in columns}
 
-        record_message = row_to_singer_record(catalog_entry,
-                                              stream_version,
-                                              db_column_types,
-                                              filtered_vals,
-                                              time_extracted)
+        record_message = row_to_singer_record(
+            catalog_entry,
+            stream_version,
+            db_column_types,
+            filtered_vals,
+            time_extracted,
+        )
 
         stream_utils.write_message(record_message)
         rows_saved += 1
@@ -511,14 +486,11 @@ def handle_update_rows_event(event, catalog_entry, state, columns, rows_saved, t
     db_column_types = get_db_column_types(event)
 
     for row in event.rows:
-        filtered_vals = {k: v for k, v in row['after_values'].items()
-                         if k in columns}
+        filtered_vals = {k: v for k, v in row['after_values'].items() if k in columns}
 
-        record_message = row_to_singer_record(catalog_entry,
-                                              stream_version,
-                                              db_column_types,
-                                              filtered_vals,
-                                              time_extracted)
+        record_message = row_to_singer_record(
+            catalog_entry, stream_version, db_column_types, filtered_vals, time_extracted
+        )
 
         stream_utils.write_message(record_message)
 
@@ -537,14 +509,11 @@ def handle_delete_rows_event(event, catalog_entry, state, columns, rows_saved, t
         vals = row['values']
         vals[SDC_DELETED_AT] = event_ts
 
-        filtered_vals = {k: v for k, v in vals.items()
-                         if k in columns}
+        filtered_vals = {k: v for k, v in vals.items() if k in columns}
 
-        record_message = row_to_singer_record(catalog_entry,
-                                              stream_version,
-                                              db_column_types,
-                                              filtered_vals,
-                                              time_extracted)
+        record_message = row_to_singer_record(
+            catalog_entry, stream_version, db_column_types, filtered_vals, time_extracted
+        )
 
         stream_utils.write_message(record_message)
 
@@ -557,21 +526,18 @@ def generate_streams_map(binlog_streams):
     stream_map = {}
 
     for catalog_entry in binlog_streams:
-        columns = add_automatic_properties(catalog_entry,
-                                           list(catalog_entry.schema.properties.keys()))
+        columns = add_automatic_properties(catalog_entry, list(catalog_entry.schema.properties.keys()))
 
-        stream_map[catalog_entry.tap_stream_id] = {
-            'catalog_entry': catalog_entry,
-            'desired_columns': columns
-        }
+        stream_map[catalog_entry.tap_stream_id] = {'catalog_entry': catalog_entry, 'desired_columns': columns}
 
     return stream_map
 
 
 def __get_diff_in_columns_list(
-        binlog_event: Union[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent],
-        schema_properties: Set[str],
-        ignore_columns: Optional[Set[str]] = None) -> Set[str]:
+    binlog_event: Union[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent],
+    schema_properties: Set[str],
+    ignore_columns: Optional[Set[str]] = None,
+) -> Set[str]:
     """
     Compare event's columns to the schema properties and get the difference
 
@@ -591,23 +557,25 @@ def __get_diff_in_columns_list(
     # to refer to this column, we don't want these columns to be included in the difference
     # we also will ignore any column using the given ignore_columns argument.
     binlog_columns_filtered = filter(
-        lambda col_name, ignored_cols=ignore_columns:
-        col_name is not None
-        and not bool(re.match(r'__dropped_col_\d+__', col_name) or col_name in ignored_cols),
-        [col.name for col in binlog_event.columns])
+        lambda col_name, ignored_cols=ignore_columns: (
+            col_name is not None and not bool(re.match(r'__dropped_col_\d+__', col_name) or col_name in ignored_cols)
+        ),
+        [col.name for col in binlog_event.columns],
+    )
 
     return set(binlog_columns_filtered).difference(schema_properties)
 
 
 # pylint: disable=R1702,R0915
 def _run_binlog_sync(
-        mysql_conn: MySQLConnection,
-        reader: BinLogStreamReader,
-        binlog_streams_map: Dict,
-        state: Dict,
-        config: Dict,
-        end_log_file: str,
-        end_log_pos: int):
+    mysql_conn: MySQLConnection,
+    reader: BinLogStreamReader,
+    binlog_streams_map: Dict,
+    state: Dict,
+    config: Dict,
+    end_log_file: str,
+    end_log_pos: int,
+):
 
     processed_rows_events = 0
     events_skipped = 0
@@ -623,7 +591,6 @@ def _run_binlog_sync(
     # Exit from the loop when the reader either runs out of streams to return or we reach
     # the end position (which is Master's)
     for binlog_event in reader:
-
         # get reader current binlog file and position
         log_file = reader.log_file
         log_pos = reader.log_pos
@@ -632,9 +599,9 @@ def _run_binlog_sync(
         # upon receiving an EOF packet. There seem to be some cases when a MySQL server will not send
         # one causing binlog replication to hang.
         if (log_file > end_log_file) or (end_log_file == log_file and log_pos >= end_log_pos):
-            LOGGER.info('BinLog reader (file: %s, pos:%s) has reached or exceeded end position, exiting!',
-                        log_file,
-                        log_pos)
+            LOGGER.info(
+                'BinLog reader (file: %s, pos:%s) has reached or exceeded end position, exiting!', log_file, log_pos
+            )
 
             # There are cases when a mass operation (inserts, updates, deletes) starts right after we get the Master
             # binlog file and position above, making the latter behind the stream reader and it causes some data loss
@@ -646,30 +613,18 @@ def _run_binlog_sync(
             break
 
         if isinstance(binlog_event, RotateEvent):
-            LOGGER.debug('RotateEvent: log_file=%s, log_pos=%d',
-                         binlog_event.next_binlog,
-                         binlog_event.position)
+            LOGGER.debug('RotateEvent: log_file=%s, log_pos=%d', binlog_event.next_binlog, binlog_event.position)
 
-            state = update_bookmarks(state,
-                                     binlog_streams_map,
-                                     binlog_event.next_binlog,
-                                     binlog_event.position,
-                                     gtid_pos
-                                     )
+            state = update_bookmarks(
+                state, binlog_streams_map, binlog_event.next_binlog, binlog_event.position, gtid_pos
+            )
 
         elif isinstance(binlog_event, (MariadbGtidEvent, GtidEvent)):
             gtid_pos = binlog_event.gtid
 
-            LOGGER.debug('%s: gtid=%s',
-                         binlog_event.__class__.__name__,
-                         gtid_pos)
+            LOGGER.debug('%s: gtid=%s', binlog_event.__class__.__name__, gtid_pos)
 
-            state = update_bookmarks(state,
-                                     binlog_streams_map,
-                                     log_file,
-                                     log_pos,
-                                     gtid_pos
-                                     )
+            state = update_bookmarks(state, binlog_streams_map, log_file, log_pos, gtid_pos)
 
             # There is strange behavior happening when using GTID in the pymysqlreplication lib,
             # explained here: https://github.com/noplay/python-mysql-replication/issues/367
@@ -678,7 +633,7 @@ def _run_binlog_sync(
             reader.auto_position = gtid_pos
 
         else:
-            time_extracted = utils.strftime(utils.now())
+            time_extracted = utils.now()
 
             tap_stream_id = common.generate_tap_stream_id(binlog_event.schema, binlog_event.table)
             streams_map_entry = binlog_streams_map.get(tap_stream_id, {})
@@ -689,52 +644,56 @@ def _run_binlog_sync(
                 events_skipped += 1
 
                 if events_skipped % UPDATE_BOOKMARK_PERIOD == 0:
-                    LOGGER.debug("Skipped %s events so far as they were not for selected tables; %s rows extracted",
-                                 events_skipped,
-                                 processed_rows_events)
+                    LOGGER.debug(
+                        'Skipped %s events so far as they were not for selected tables; %s rows extracted',
+                        events_skipped,
+                        processed_rows_events,
+                    )
             else:
                 # Compare event's columns to the schema properties
-                diff = __get_diff_in_columns_list(binlog_event,
-                                                  catalog_entry.schema.properties.keys(),
-                                                  ignored_columns)
+                diff = __get_diff_in_columns_list(binlog_event, catalog_entry.schema.properties.keys(), ignored_columns)
 
                 # If there are additional cols in the event then run discovery if needed and update the catalog
                 if diff:
-
                     LOGGER.info('Stream `%s`: Difference detected between event and schema: %s', tap_stream_id, diff)
 
-                    md_map = metadata.to_map(catalog_entry.metadata)
-
-                    if not should_run_discovery(diff, md_map):
-                        LOGGER.info('Stream `%s`: Not running discovery. Ignoring all detected columns in %s',
-                                    tap_stream_id,
-                                    diff)
+                    if not should_run_discovery(diff, catalog_entry.metadata):
+                        LOGGER.info(
+                            'Stream `%s`: Not running discovery. Ignoring all detected columns in %s',
+                            tap_stream_id,
+                            diff,
+                        )
                         ignored_columns = ignored_columns.union(diff)
 
                     else:
                         LOGGER.info('Stream `%s`: Running discovery ... ', tap_stream_id)
 
                         # run discovery for the current table only
-                        new_catalog_entry = discover_catalog(mysql_conn,
-                                                             config.get('filter_dbs'),
-                                                             catalog_entry.table).streams[0]
-
-                        selected = {k for k, v in new_catalog_entry.schema.properties.items()
-                                    if common.property_is_selected(new_catalog_entry, k)}
+                        new_catalog_entry = discover_catalog(
+                            mysql_conn,
+                            config.get('filter_dbs'),
+                            catalog_entry.table,
+                        ).streams[0]
 
                         # the new catalog has "stream" property = table name, we need to update that to make it the
                         # same as the result of the "resolve_catalog" function
                         new_catalog_entry.stream = tap_stream_id
 
-                        # These are the columns we need to select
-                        new_columns = desired_columns(selected, new_catalog_entry.schema)
+                        # These are the columns we need to select: every discovered column that is
+                        # supported (available or automatic), since we want to pick up all new columns
+                        props = new_catalog_entry.schema.properties or {}
+                        new_columns = desired_columns(
+                            set(props),
+                            new_catalog_entry.schema,
+                            new_catalog_entry.metadata,
+                        )
 
-                        cols = set(new_catalog_entry.schema.properties.keys())
+                        cols = set(props)
 
                         # drop unsupported properties from schema
                         for col in cols:
                             if col not in new_columns:
-                                new_catalog_entry.schema.properties.pop(col, None)
+                                props.pop(col, None)
 
                         # Add the _sdc_deleted_at col
                         new_columns = add_automatic_properties(new_catalog_entry, list(new_columns))
@@ -750,42 +709,46 @@ def _run_binlog_sync(
                             columns = new_columns
 
                 if isinstance(binlog_event, WriteRowsEvent):
-                    processed_rows_events = handle_write_rows_event(binlog_event,
-                                                                    catalog_entry,
-                                                                    state,
-                                                                    columns,
-                                                                    processed_rows_events,
-                                                                    time_extracted)
+                    processed_rows_events = handle_write_rows_event(
+                        binlog_event,
+                        catalog_entry,
+                        state,
+                        columns,
+                        processed_rows_events,
+                        time_extracted,
+                    )
 
                 elif isinstance(binlog_event, UpdateRowsEvent):
-                    processed_rows_events = handle_update_rows_event(binlog_event,
-                                                                     catalog_entry,
-                                                                     state,
-                                                                     columns,
-                                                                     processed_rows_events,
-                                                                     time_extracted)
+                    processed_rows_events = handle_update_rows_event(
+                        binlog_event,
+                        catalog_entry,
+                        state,
+                        columns,
+                        processed_rows_events,
+                        time_extracted,
+                    )
 
                 elif isinstance(binlog_event, DeleteRowsEvent):
-                    processed_rows_events = handle_delete_rows_event(binlog_event,
-                                                                     catalog_entry,
-                                                                     state,
-                                                                     columns,
-                                                                     processed_rows_events,
-                                                                     time_extracted)
+                    processed_rows_events = handle_delete_rows_event(
+                        binlog_event,
+                        catalog_entry,
+                        state,
+                        columns,
+                        processed_rows_events,
+                        time_extracted,
+                    )
                 else:
-                    LOGGER.debug("Skipping event for table %s.%s as it is not an INSERT, UPDATE, or DELETE",
-                                 binlog_event.schema,
-                                 binlog_event.table)
+                    LOGGER.debug(
+                        'Skipping event for table %s.%s as it is not an INSERT, UPDATE, or DELETE',
+                        binlog_event.schema,
+                        binlog_event.table,
+                    )
 
         # Update singer bookmark and send STATE message periodically
-        if ((processed_rows_events and processed_rows_events % UPDATE_BOOKMARK_PERIOD == 0) or
-                (events_skipped and events_skipped % UPDATE_BOOKMARK_PERIOD == 0)):
-            state = update_bookmarks(state,
-                                     binlog_streams_map,
-                                     log_file,
-                                     log_pos,
-                                     gtid_pos
-                                     )
+        if (processed_rows_events and processed_rows_events % UPDATE_BOOKMARK_PERIOD == 0) or (
+            events_skipped and events_skipped % UPDATE_BOOKMARK_PERIOD == 0
+        ):
+            state = update_bookmarks(state, binlog_streams_map, log_file, log_pos, gtid_pos)
             stream_utils.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
     LOGGER.info('Processed %s rows', processed_rows_events)
@@ -800,18 +763,11 @@ def _run_binlog_sync(
 
     # Update singer bookmark at the last time to point it the last processed binlog event
     if log_file and log_pos:
-        state = update_bookmarks(state,
-                                 binlog_streams_map,
-                                 log_file,
-                                 log_pos,
-                                 gtid_pos)
+        state = update_bookmarks(state, binlog_streams_map, log_file, log_pos, gtid_pos)
 
 
 def create_binlog_stream_reader(
-        config: Dict,
-        log_file: Optional[str],
-        log_pos: Optional[int],
-        gtid_pos: Optional[str]
+    config: Dict, log_file: Optional[str], log_pos: Optional[int], gtid_pos: Optional[str]
 ) -> BinLogStreamReader:
     """
     Create an instance of BinlogStreamReader with the right config
@@ -826,10 +782,10 @@ def create_binlog_stream_reader(
     """
     if config.get('server_id'):
         server_id = int(config.get('server_id'))
-        LOGGER.info("Using provided server_id=%s", server_id)
+        LOGGER.info('Using provided server_id=%s', server_id)
     else:
         server_id = random.randint(1, 2 ^ 32)  # generate random server id for this slave
-        LOGGER.info("Using randomly generated server_id=%s", server_id)
+        LOGGER.info('Using randomly generated server_id=%s', server_id)
 
     engine = config['engine']
 
@@ -847,7 +803,6 @@ def create_binlog_stream_reader(
         kwargs['only_schemas'] = config['filter_dbs'].split(',')
 
     if config['use_gtid']:
-
         if not gtid_pos:
             raise ValueError(f'gtid_pos is empty "{gtid_pos}"! Cannot start logical replication from empty gtid.')
 
@@ -859,8 +814,10 @@ def create_binlog_stream_reader(
 
     else:
         if not log_file or not log_pos or log_pos < 0:
-            raise ValueError(f'log file or pos is empty ("{log_file}", "{log_pos}")! '
-                             f'Cannot start logical replication from invalid log file/pos.')
+            raise ValueError(
+                f'log file or pos is empty ("{log_file}", "{log_pos}")! '
+                f'Cannot start logical replication from invalid log file/pos.'
+            )
 
         LOGGER.info("Starting logical replication from binlog file ['%s', %d]", log_file, log_pos)
 
@@ -874,10 +831,8 @@ def create_binlog_stream_reader(
 
 
 def sync_binlog_stream(
-        mysql_conn: MySQLConnection,
-        config: Dict,
-        binlog_streams_map: Dict[str, Any],
-        state: Dict) -> None:
+    mysql_conn: MySQLConnection, config: Dict, binlog_streams_map: Dict[str, Any], state: Dict
+) -> None:
     """
     Capture the binlog events created between the pos in the state and current Master position and creates Singer
     streams to be flushed to stdout

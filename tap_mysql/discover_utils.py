@@ -3,44 +3,35 @@
 import collections
 import itertools
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from collections.abc import Iterable
+from typing import List, Optional, Set
 
-from singer import Schema, get_logger, metadata
-from singer.catalog import Catalog, CatalogEntry
+from singer import MetadataMapping, Schema, get_logger
+from singer.catalog import Catalog, CatalogEntry, Metadata
 
 from tap_mysql.connection import MySQLConnection, connect_with_backoff
 from tap_mysql.sync_strategies import common
 
 LOGGER = get_logger('tap_mysql')
 
-Column = collections.namedtuple('Column', [
-    "table_schema",
-    "table_name",
-    "column_name",
-    "data_type",
-    "character_maximum_length",
-    "numeric_precision",
-    "numeric_scale",
-    "column_type",
-    "column_key"])
+Column = collections.namedtuple(
+    'Column',
+    [
+        'table_schema',
+        'table_name',
+        'column_name',
+        'data_type',
+        'character_maximum_length',
+        'numeric_precision',
+        'numeric_scale',
+        'column_type',
+        'column_key',
+    ],
+)
 
-STRING_TYPES = {
-    'char',
-    'enum',
-    'tinytext',
-    'longtext',
-    'mediumtext',
-    'text',
-    'varchar'
-}
+STRING_TYPES = {'char', 'enum', 'tinytext', 'longtext', 'mediumtext', 'text', 'varchar'}
 
-BYTES_FOR_INTEGER_TYPE = {
-    'tinyint': 1,
-    'smallint': 2,
-    'mediumint': 3,
-    'int': 4,
-    'bigint': 8
-}
+BYTES_FOR_INTEGER_TYPE = {'tinyint': 1, 'smallint': 2, 'mediumint': 3, 'int': 4, 'bigint': 8}
 
 BOOL_TYPES = {'bit'}
 
@@ -52,9 +43,16 @@ DATETIME_TYPES = {'datetime', 'timestamp', 'time', 'date'}
 
 BINARY_TYPES = {'binary', 'varbinary'}
 
-SPATIAL_TYPES = {'geometry', 'point', 'linestring',
-                 'polygon', 'multipoint', 'multilinestring',
-                 'multipolygon', 'geometrycollection'}
+SPATIAL_TYPES = {
+    'geometry',
+    'point',
+    'linestring',
+    'polygon',
+    'multipoint',
+    'multilinestring',
+    'multipolygon',
+    'geometrycollection',
+}
 
 # MySQL 8.0+ uses 'geomcollection' as the internal name for GEOMETRYCOLLECTION.
 _DATA_TYPE_ALIASES = {'geomcollection': 'geometrycollection'}
@@ -91,18 +89,18 @@ def _normalize_column_type(col: 'Column') -> str:
 
 
 # A set of all supported column types listed above
-SUPPORTED_COLUMN_TYPES_AGGREGATED = \
-    STRING_TYPES \
-        .union(FLOAT_TYPES) \
-        .union(DATETIME_TYPES) \
-        .union(BINARY_TYPES) \
-        .union(SPATIAL_TYPES) \
-        .union(BOOL_TYPES) \
-        .union(JSON_TYPES) \
-        .union(BYTES_FOR_INTEGER_TYPE.keys())
+SUPPORTED_COLUMN_TYPES_AGGREGATED = (
+    STRING_TYPES.union(FLOAT_TYPES)
+    .union(DATETIME_TYPES)
+    .union(BINARY_TYPES)
+    .union(SPATIAL_TYPES)
+    .union(BOOL_TYPES)
+    .union(JSON_TYPES)
+    .union(BYTES_FOR_INTEGER_TYPE.keys())
+)
 
 
-def is_supported_column_type(column_datatype: str) -> bool:
+def is_supported_column_type(column_datatype: str | None) -> bool:
     """
     Checks if the given sql datatype is supported
 
@@ -114,7 +112,7 @@ def is_supported_column_type(column_datatype: str) -> bool:
     return column_datatype in SUPPORTED_COLUMN_TYPES_AGGREGATED
 
 
-def should_run_discovery(column_names: Set[str], md_map: Dict[Tuple, Dict]) -> bool:
+def should_run_discovery(column_names: Set[str], md_map: MetadataMapping) -> bool:
     """
     Checks if we need to run discovery using a given metadata mapping.
 
@@ -126,9 +124,7 @@ def should_run_discovery(column_names: Set[str], md_map: Dict[Tuple, Dict]) -> b
 
     Args:
         column_names: A set of column names as strings
-        md_map: a stream metadata as a map, usually you get it by running:
-        >> import singer
-        >> md_map = singer.metadata.to_map(stream_catalog['metadata'])
+        md_map: a stream metadata as a map
 
     Returns: True if we should run discovery, False otherwise
 
@@ -144,19 +140,21 @@ def should_run_discovery(column_names: Set[str], md_map: Dict[Tuple, Dict]) -> b
             LOGGER.debug('Will run discovery because `%s` not in stream metadata', column_name)
             return True
 
-        if md_properties.get('selected-by-default') and is_supported_column_type(md_properties.get('datatype', '')):
+        if md_properties.selected_by_default and is_supported_column_type(md_properties.datatype):
             LOGGER.debug('Will run discovery because `%s` is selected by default and of supported type', column_name)
             return True
 
     return False
 
 
-def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optional[str] = None):
+def discover_catalog(mysql_conn: MySQLConnection, dbs: str | None = None, tables: Optional[str] = None) -> Catalog:
     """Returns a Catalog describing the structure of the database."""
 
+    catalog = Catalog()
+
     if dbs:
-        filter_dbs_clause = ",".join([f"'{db_name}'" for db_name in dbs.split(",")])
-        table_schema_clause = f"WHERE table_schema IN ({filter_dbs_clause})"
+        filter_dbs_clause = ','.join([f"'{db_name}'" for db_name in dbs.split(',')])
+        table_schema_clause = f'WHERE table_schema IN ({filter_dbs_clause})'
     else:
         table_schema_clause = """
         WHERE table_schema NOT IN (
@@ -169,8 +167,8 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
     tables_clause = ''
 
     if tables is not None and tables != '':
-        filter_tables_clause = ",".join([f"'{table_name}'" for table_name in tables.split(",")])
-        tables_clause = f" AND table_name IN ({filter_tables_clause})"
+        filter_tables_clause = ','.join([f"'{table_name}'" for table_name in tables.split(',')])
+        tables_clause = f' AND table_name IN ({filter_tables_clause})'
 
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
@@ -185,14 +183,11 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
 
             table_info = {}
 
-            for (db_name, table, table_type, rows) in cur.fetchall():
+            for db_name, table, table_type, rows in cur.fetchall():
                 if db_name not in table_info:
                     table_info[db_name] = {}
 
-                table_info[db_name][table] = {
-                    'row_count': rows,
-                    'is_view': table_type == 'VIEW'
-                }
+                table_info[db_name][table] = {'row_count': rows, 'is_view': table_type == 'VIEW'}
 
             cur.execute(f"""
                 SELECT table_schema,
@@ -216,19 +211,13 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
                 rec = cur.fetchone()
 
             entries = []
-            for (k, cols) in itertools.groupby(columns, lambda c: (c.table_schema, c.table_name)):
+            for k, cols in itertools.groupby(columns, lambda c: (c.table_schema, c.table_name)):
                 cols = list(cols)
                 (table_schema, table_name) = k
 
-                schema = Schema(type='object',
-                                properties={c.column_name: schema_for_column(c) for c in cols})
+                schema = Schema(type='object', properties={c.column_name: schema_for_column(c)[0] for c in cols})
                 mdata = create_column_metadata(cols)
-                md_map = metadata.to_map(mdata)
-
-                md_map = metadata.write(md_map,
-                                        (),
-                                        'database-name',
-                                        table_schema)
+                mdata.root.database_name = table_schema
 
                 is_view = table_info[table_schema][table_name]['is_view']
 
@@ -236,51 +225,44 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
                     row_count = table_info[table_schema][table_name].get('row_count')
 
                     if row_count is not None:
-                        md_map = metadata.write(md_map,
-                                                (),
-                                                'row-count',
-                                                row_count)
+                        mdata.root.row_count = row_count
 
-                    md_map = metadata.write(md_map,
-                                            (),
-                                            'is-view',
-                                            is_view)
+                    mdata.root.is_view = is_view
 
-                def column_is_key_prop(c, s):
-                    return c.column_key == 'PRI' and s.properties[c.column_name].inclusion != 'unsupported'
+                def column_is_key_prop(c: Column, m: MetadataMapping):
+                    return c.column_key == 'PRI' and m['properties', c.column_name].inclusion != 'unsupported'
 
-                key_properties = [c.column_name for c in cols if column_is_key_prop(c, schema)]
+                key_properties = [c.column_name for c in cols if column_is_key_prop(c, mdata)]
 
                 if not is_view:
-                    md_map = metadata.write(md_map,
-                                            (),
-                                            'table-key-properties',
-                                            key_properties)
+                    mdata.root.table_key_properties = key_properties
 
                 entry = CatalogEntry(
                     table=table_name,
                     stream=table_name,
-                    metadata=metadata.to_list(md_map),
+                    metadata=mdata,
                     tap_stream_id=common.generate_tap_stream_id(table_schema, table_name),
-                    schema=schema)
+                    schema=schema,
+                )
 
                 entries.append(entry)
+                catalog.add_stream(entry)
 
-    return Catalog(entries)
+    return catalog
 
 
-def schema_for_column(column):  # pylint: disable=too-many-branches
+def schema_for_column(column) -> tuple[Schema, Metadata.InclusionType]:  # pylint: disable=too-many-branches
     """Returns the Schema object for the given Column."""
 
     data_type = _normalize_data_type(column.data_type.lower())
     column_type = column.column_type.lower()
 
-    inclusion = 'available'
+    inclusion = Metadata.InclusionType.AVAILABLE
     # We want to automatically include all primary key columns
     if column.column_key.lower() == 'pri':
-        inclusion = 'automatic'
+        inclusion = Metadata.InclusionType.AUTOMATIC
 
-    result = Schema(inclusion=inclusion)
+    result = Schema()
 
     if data_type in BOOL_TYPES or column_type.startswith('tinyint(1)'):
         result.type = ['null', 'boolean']
@@ -290,7 +272,7 @@ def schema_for_column(column):  # pylint: disable=too-many-branches
         bits = BYTES_FOR_INTEGER_TYPE[data_type] * 8
         if 'unsigned' in column_type:
             result.minimum = 0
-            result.maximum = 2 ** bits - 1
+            result.maximum = 2**bits - 1
         else:
             result.minimum = 0 - 2 ** (bits - 1)
             result.maximum = 2 ** (bits - 1) - 1
@@ -325,87 +307,84 @@ def schema_for_column(column):  # pylint: disable=too-many-branches
         result.format = 'spatial'
 
     else:
-        result = Schema(None,
-                        inclusion='unsupported',
-                        description=f'Unsupported column type {column_type}')
-    return result
+        inclusion = Metadata.InclusionType.UNSUPPORTED
+        result = Schema(None, description=f'Unsupported column type {column_type}')
+
+    return result, inclusion
 
 
-def create_column_metadata(cols: List[Column]):
-    mdata = {}
-    mdata = metadata.write(mdata, (), 'selected-by-default', False)
+def create_column_metadata(cols: List[Column]) -> MetadataMapping:
+    mdata = MetadataMapping()
+    mdata.root.selected_by_default = False
     for col in cols:
-        schema = schema_for_column(col)
-        mdata = metadata.write(mdata,
-                               ('properties', col.column_name),
-                               'selected-by-default', schema.inclusion != 'unsupported')
+        schema, inclusion = schema_for_column(col)
+        mdata['properties', col.column_name].inclusion = inclusion
+        mdata['properties', col.column_name].selected_by_default = inclusion != 'unsupported'
+        mdata['properties', col.column_name].sql_datatype = _normalize_column_type(col)
+        mdata['properties', col.column_name].datatype = _normalize_data_type(col.data_type.lower())
 
-        mdata = metadata.write(mdata,
-                               ('properties', col.column_name),
-                               'sql-datatype', _normalize_column_type(col))
-
-
-        mdata = metadata.write(mdata,
-                               ('properties', col.column_name),
-                               'datatype', _normalize_data_type(col.data_type.lower())
-                               )
-
-    return metadata.to_list(mdata)
+    return mdata
 
 
-def resolve_catalog(discovered_catalog, streams_to_sync):
-    result = Catalog(streams=[])
+def resolve_catalog(discovered_catalog: Catalog, streams_to_sync: Iterable[CatalogEntry]):
+    result = Catalog()
 
     # Iterate over the streams in the input catalog and match each one up
     # with the same stream in the discovered catalog.
     for catalog_entry in streams_to_sync:
-        catalog_metadata = metadata.to_map(catalog_entry.metadata)
-        replication_key = catalog_metadata.get((), {}).get('replication-key')
+        replication_key = catalog_entry.metadata.root.replication_key
 
         discovered_table = discovered_catalog.get_stream(catalog_entry.tap_stream_id)
         database_name = common.get_database_name(catalog_entry)
 
         if not discovered_table:
-            LOGGER.warning('Database %s table %s was selected but does not exist',
-                           database_name, catalog_entry.table)
+            LOGGER.warning('Database %s table %s was selected but does not exist', database_name, catalog_entry.table)
             continue
 
-        selected = {k for k, v in catalog_entry.schema.properties.items()
-                    if common.property_is_selected(catalog_entry, k) or k == replication_key}
+        input_properties = catalog_entry.schema.properties or {}
+        discovered_properties = discovered_table.schema.properties or {}
+
+        mask = catalog_entry.metadata.resolve_selection()
+        selected = {k for k in input_properties if mask['properties', k] or k == replication_key}
 
         # These are the columns we need to select
-        columns = desired_columns(selected, discovered_table.schema)
+        columns = desired_columns(selected, discovered_table.schema, discovered_table.metadata)
 
-        result.streams.append(CatalogEntry(
-            tap_stream_id=catalog_entry.tap_stream_id,
-            metadata=catalog_entry.metadata,
-            stream=catalog_entry.tap_stream_id,
-            table=catalog_entry.table,
-            schema=Schema(
-                type='object',
-                properties={col: discovered_table.schema.properties[col]
-                            for col in columns}
+        result.add_stream(
+            CatalogEntry(
+                tap_stream_id=catalog_entry.tap_stream_id,
+                metadata=catalog_entry.metadata,
+                stream=catalog_entry.tap_stream_id,
+                table=catalog_entry.table,
+                schema=Schema(
+                    type='object',
+                    properties={col: discovered_properties[col] for col in columns},
+                ),
             )
-        ))
+        )
 
     return result
 
 
-def desired_columns(selected, table_schema) -> Set:
+def desired_columns(selected: set[str], table_schema: Schema, table_metadata: MetadataMapping) -> Set:
     """
     Return the set of column names we need to include in the SELECT.
 
     selected - set of column names marked as selected in the input catalog
     table_schema - the most recently discovered Schema for the table
+    table_metadata - the most recently discovered metadata for the table, which
+        carries each column's inclusion (available/automatic/unsupported);
+        the schema's own properties only describe JSON-schema type information
     """
     all_columns = set()
     available = set()
     automatic = set()
     unsupported = set()
 
-    for column, column_schema in table_schema.properties.items():
+    props = table_schema.properties or {}
+    for column in props:
         all_columns.add(column)
-        inclusion = column_schema.inclusion
+        inclusion = table_metadata['properties', column].inclusion
         if inclusion == 'automatic':
             automatic.add(column)
         elif inclusion == 'available':
@@ -417,20 +396,14 @@ def desired_columns(selected, table_schema) -> Set:
 
     selected_but_unsupported = selected.intersection(unsupported)
     if selected_but_unsupported:
-        LOGGER.warning(
-            'Columns %s were selected but are not supported. Skipping them.',
-            selected_but_unsupported)
+        LOGGER.warning('Columns %s were selected but are not supported. Skipping them.', selected_but_unsupported)
 
     selected_but_nonexistent = selected.difference(all_columns)
     if selected_but_nonexistent:
-        LOGGER.warning(
-            'Columns %s were selected but do not exist.',
-            selected_but_nonexistent)
+        LOGGER.warning('Columns %s were selected but do not exist.', selected_but_nonexistent)
 
     not_selected_but_automatic = automatic.difference(selected)
     if not_selected_but_automatic:
-        LOGGER.warning(
-            'Columns %s are primary keys but were not selected. Adding them.',
-            not_selected_but_automatic)
+        LOGGER.warning('Columns %s are primary keys but were not selected. Adding them.', not_selected_but_automatic)
 
     return selected.intersection(available).union(automatic)

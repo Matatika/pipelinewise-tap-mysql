@@ -1,14 +1,11 @@
-import unittest
 from unittest.mock import MagicMock, call, patch
 
 from tap_mysql.connection import MySQLConnection, fetch_server_id, fetch_server_uuid
 
 
-class TestConnection(unittest.TestCase):
-
+class TestConnection:
     @patch('tap_mysql.connection.connect_with_backoff')
     def test_fetch_server_id(self, connect_with_backoff):
-
         mysql_con = MagicMock(spec_set=MySQLConnection).return_value
         cur_mock = MagicMock().return_value
         cur_mock.__enter__.return_value.fetchone.return_value = [111]
@@ -19,19 +16,14 @@ class TestConnection(unittest.TestCase):
 
         result = fetch_server_id(mysql_con)
 
-        self.assertEqual(111, result)
+        assert result == 111
 
         connect_with_backoff.assert_called_with(mysql_con)
 
-        cur_mock.__enter__.return_value.execute.assert_has_calls(
-            [
-                call('SELECT @@server_id'),
-            ]
-        )
+        cur_mock.__enter__.return_value.execute.assert_has_calls([call('SELECT @@server_id')])
 
     @patch('tap_mysql.connection.connect_with_backoff')
     def test_fetch_server_uuid(self, connect_with_backoff):
-
         mysql_con = MagicMock(spec_set=MySQLConnection).return_value
         cur_mock = MagicMock().return_value
         cur_mock.__enter__.return_value.fetchone.return_value = ['dkfhdsf0-ejr-dfbsf-dnfnsbdmfbdf']
@@ -42,12 +34,8 @@ class TestConnection(unittest.TestCase):
 
         result = fetch_server_uuid(mysql_con)
 
-        self.assertEqual('dkfhdsf0-ejr-dfbsf-dnfnsbdmfbdf', result)
+        assert result == 'dkfhdsf0-ejr-dfbsf-dnfnsbdmfbdf'
 
         connect_with_backoff.assert_called_with(mysql_con)
 
-        cur_mock.__enter__.return_value.execute.assert_has_calls(
-            [
-                call('SELECT @@server_uuid'),
-            ]
-        )
+        cur_mock.__enter__.return_value.execute.assert_has_calls([call('SELECT @@server_uuid')])

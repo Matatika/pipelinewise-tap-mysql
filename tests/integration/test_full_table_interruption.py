@@ -15,23 +15,18 @@ SINGER_MESSAGES = []
 TABLE_2_RECORD_COUNT = 0
 
 #                FOO   BAR
-TABLE_1_DATA = [[100, 'abc'],
-                [200, 'def'],
-                [300, 'ghi']]
+TABLE_1_DATA = [[100, 'abc'], [200, 'def'], [300, 'ghi']]
 
 TABLE_2_DATA = TABLE_1_DATA[::-1]
 
 
 def insert_record(conn, table_name, record):
-    value_sql = ",".join(["%s" for i in range(len(record))])
+    value_sql = ','.join(['%s' for i in range(len(record))])
 
     insert_sql = """
         INSERT INTO {}.{}
                ( `foo`, `bar` )
-        VALUES ( {} )""".format(
-        test_utils.DB_NAME,
-        table_name,
-        value_sql)
+        VALUES ( {} )""".format(test_utils.DB_NAME, table_name, value_sql)
 
     with connect_with_backoff(conn) as open_conn:
         with open_conn.cursor() as cur:
@@ -45,7 +40,7 @@ def singer_write_message_no_table_2(message):
         TABLE_2_RECORD_COUNT = TABLE_2_RECORD_COUNT + 1
 
         if TABLE_2_RECORD_COUNT > 1:
-            raise Exception("simulated exception")
+            raise Exception('simulated exception')
 
     SINGER_MESSAGES.append(message)
 
@@ -77,7 +72,7 @@ def init_tables(conn):
     for record in TABLE_2_DATA:
         insert_record(conn, 'table_2', record)
 
-    catalog = test_utils.discover_catalog(conn, {})
+    catalog = test_utils.discover_catalog(conn)
 
     return catalog
 
@@ -89,15 +84,21 @@ class BinlogInterruption(unittest.TestCase):
         self.catalog = init_tables(self.conn)
 
         for stream in self.catalog.streams:
-            stream.metadata = [
-                {'breadcrumb': (),
-                 'metadata': {'selected': True,
-                              'database-name': 'tap_mysql_test',
-                              'table-key-properties': ['id']}},
-                {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'foo'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'bar'), 'metadata': {'selected': True}},
-            ]
+            stream.metadata = singer.MetadataMapping.from_iterable(
+                [
+                    {
+                        'breadcrumb': (),
+                        'metadata': {
+                            'selected': True,
+                            'database-name': 'tap_mysql_test',
+                            'table-key-properties': ['id'],
+                        },
+                    },
+                    {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'foo'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'bar'), 'metadata': {'selected': True}},
+                ]
+            )
 
             stream.stream = stream.table
 
@@ -130,22 +131,24 @@ class BinlogInterruption(unittest.TestCase):
 
         self.assertTrue(failed_syncing_table_2)
 
-        record_messages_1 = [[m.stream, m.record] for m in SINGER_MESSAGES
-                             if isinstance(m, singer.RecordMessage)]
+        record_messages_1 = [[m.stream, m.record] for m in SINGER_MESSAGES if isinstance(m, singer.RecordMessage)]
 
-        self.assertEqual(record_messages_1,
-                         [['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
-                          ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
-                          ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}],
-                          ['tap_mysql_test-table_2', {'id': 1, 'bar': 'ghi', 'foo': 300}]])
+        self.assertEqual(
+            record_messages_1,
+            [
+                ['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
+                ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
+                ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}],
+                ['tap_mysql_test-table_2', {'id': 1, 'bar': 'ghi', 'foo': 300}],
+            ],
+        )
 
         self.assertEqual(state['currently_syncing'], 'tap_mysql_test-table_2')
 
         table_1_bookmark = state['bookmarks']['tap_mysql_test-table_1']
         table_2_bookmark = state['bookmarks']['tap_mysql_test-table_2']
 
-        self.assertEqual(table_1_bookmark,
-                         {'initial_full_table_complete': True})
+        self.assertEqual(table_1_bookmark, {'initial_full_table_complete': True})
 
         self.assertIsNone(table_2_bookmark.get('initial_full_table_complete'))
 
@@ -167,23 +170,25 @@ class BinlogInterruption(unittest.TestCase):
 
         self.assertFalse(failed_syncing_table_2)
 
-        record_messages_2 = [[m.stream, m.record] for m in SINGER_MESSAGES
-                             if isinstance(m, singer.RecordMessage)]
+        record_messages_2 = [[m.stream, m.record] for m in SINGER_MESSAGES if isinstance(m, singer.RecordMessage)]
 
-        self.assertEqual(record_messages_2,
-                         [['tap_mysql_test-table_2', {'id': 2, 'bar': 'def', 'foo': 200}],
-                          ['tap_mysql_test-table_2', {'id': 3, 'bar': 'abc', 'foo': 100}],
-                          ['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
-                          ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
-                          ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}]])
+        self.assertEqual(
+            record_messages_2,
+            [
+                ['tap_mysql_test-table_2', {'id': 2, 'bar': 'def', 'foo': 200}],
+                ['tap_mysql_test-table_2', {'id': 3, 'bar': 'abc', 'foo': 100}],
+                ['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
+                ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
+                ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}],
+            ],
+        )
 
         self.assertIsNone(state['currently_syncing'])
 
         table_1_bookmark = state['bookmarks']['tap_mysql_test-table_1']
         table_2_bookmark = state['bookmarks']['tap_mysql_test-table_2']
 
-        self.assertEqual(table_1_bookmark,
-                         {'initial_full_table_complete': True})
+        self.assertEqual(table_1_bookmark, {'initial_full_table_complete': True})
 
         self.assertIsNone(table_2_bookmark.get('initial_full_table_complete'))
 
@@ -196,8 +201,7 @@ class BinlogInterruption(unittest.TestCase):
         self.assertIsNotNone(table_2_bookmark.get('log_file'))
         self.assertIsNotNone(table_2_bookmark.get('log_pos'))
 
-        new_table_2_records = [[400, 'jkl'],
-                               [500, 'mno']]
+        new_table_2_records = [[400, 'jkl'], [500, 'mno']]
 
         for record in new_table_2_records:
             insert_record(self.conn, 'table_2', record)
@@ -208,23 +212,25 @@ class BinlogInterruption(unittest.TestCase):
 
         self.assertFalse(failed_syncing_table_2)
 
-        record_messages_3 = [[m.stream, m.record] for m in SINGER_MESSAGES
-                             if isinstance(m, singer.RecordMessage)]
+        record_messages_3 = [[m.stream, m.record] for m in SINGER_MESSAGES if isinstance(m, singer.RecordMessage)]
 
-        self.assertEqual(record_messages_3,
-                         [['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
-                          ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
-                          ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}],
-                          ['tap_mysql_test-table_2', {'id': 4, 'bar': 'jkl', 'foo': 400}],
-                          ['tap_mysql_test-table_2', {'id': 5, 'bar': 'mno', 'foo': 500}]])
+        self.assertEqual(
+            record_messages_3,
+            [
+                ['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
+                ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
+                ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}],
+                ['tap_mysql_test-table_2', {'id': 4, 'bar': 'jkl', 'foo': 400}],
+                ['tap_mysql_test-table_2', {'id': 5, 'bar': 'mno', 'foo': 500}],
+            ],
+        )
 
         self.assertIsNone(state['currently_syncing'])
 
         table_1_bookmark = state['bookmarks']['tap_mysql_test-table_1']
         table_2_bookmark = state['bookmarks']['tap_mysql_test-table_2']
 
-        self.assertEqual(table_1_bookmark,
-                         {'initial_full_table_complete': True})
+        self.assertEqual(table_1_bookmark, {'initial_full_table_complete': True})
 
         self.assertIsNone(table_2_bookmark.get('initial_full_table_complete'))
         self.assertIsNotNone(table_2_bookmark.get('log_file'))
@@ -238,15 +244,21 @@ class FullTableInterruption(unittest.TestCase):
         self.catalog = init_tables(self.conn)
 
         for stream in self.catalog.streams:
-            stream.metadata = [
-                {'breadcrumb': (),
-                 'metadata': {'selected': True,
-                              'database-name': 'tap_mysql_test',
-                              'table-key-properties': ['id']}},
-                {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'foo'), 'metadata': {'selected': True}},
-                {'breadcrumb': ('properties', 'bar'), 'metadata': {'selected': True}},
-            ]
+            stream.metadata = singer.MetadataMapping.from_iterable(
+                [
+                    {
+                        'breadcrumb': (),
+                        'metadata': {
+                            'selected': True,
+                            'database-name': 'tap_mysql_test',
+                            'table-key-properties': ['id'],
+                        },
+                    },
+                    {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'foo'), 'metadata': {'selected': True}},
+                    {'breadcrumb': ('properties', 'bar'), 'metadata': {'selected': True}},
+                ]
+            )
 
             stream.stream = stream.table
             test_utils.set_replication_method_and_key(stream, 'FULL_TABLE', None)
@@ -275,15 +287,17 @@ class FullTableInterruption(unittest.TestCase):
 
         self.assertTrue(failed_syncing_table_2)
 
-        record_messages_1 = [[m.stream, m.record] for m in SINGER_MESSAGES
-                             if isinstance(m, singer.RecordMessage)]
+        record_messages_1 = [[m.stream, m.record] for m in SINGER_MESSAGES if isinstance(m, singer.RecordMessage)]
 
-        self.assertEqual(record_messages_1,
-                         [['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
-                          ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
-                          ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}],
-                          ['tap_mysql_test-table_2', {'id': 1, 'bar': 'ghi', 'foo': 300}]
-                          ])
+        self.assertEqual(
+            record_messages_1,
+            [
+                ['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
+                ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
+                ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}],
+                ['tap_mysql_test-table_2', {'id': 1, 'bar': 'ghi', 'foo': 300}],
+            ],
+        )
 
         failed_syncing_table_2 = False
         tap_mysql.stream_utils.write_message = singer_write_message_ok
@@ -295,29 +309,29 @@ class FullTableInterruption(unittest.TestCase):
         self.assertFalse(failed_syncing_table_2)
 
         record_messages_2 = [[m.stream, m.record] for m in SINGER_MESSAGES if isinstance(m, singer.RecordMessage)]
-        self.assertEqual(record_messages_2,
-                         [['tap_mysql_test-table_2', {'id': 2, 'bar': 'def', 'foo': 200}],
-                          ['tap_mysql_test-table_2', {'id': 3, 'bar': 'abc', 'foo': 100}],
-                          ['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
-                          ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
-                          ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}]])
+        self.assertEqual(
+            record_messages_2,
+            [
+                ['tap_mysql_test-table_2', {'id': 2, 'bar': 'def', 'foo': 200}],
+                ['tap_mysql_test-table_2', {'id': 3, 'bar': 'abc', 'foo': 100}],
+                ['tap_mysql_test-table_1', {'id': 1, 'bar': 'abc', 'foo': 100}],
+                ['tap_mysql_test-table_1', {'id': 2, 'bar': 'def', 'foo': 200}],
+                ['tap_mysql_test-table_1', {'id': 3, 'bar': 'ghi', 'foo': 300}],
+            ],
+        )
 
         expected_state_2 = {
             'currently_syncing': None,
             'bookmarks': {
-                'tap_mysql_test-table_1': {
-                    'initial_full_table_complete': True
-                },
-                'tap_mysql_test-table_2': {
-                    'initial_full_table_complete': True
-                }
-            }
+                'tap_mysql_test-table_1': {'initial_full_table_complete': True},
+                'tap_mysql_test-table_2': {'initial_full_table_complete': True},
+            },
         }
 
         self.assertEqual(state, expected_state_2)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     test1 = BinlogInterruption()
     test1.setUp()
     test1.test_table_2_interrupted()
