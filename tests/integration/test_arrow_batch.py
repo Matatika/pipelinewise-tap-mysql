@@ -162,6 +162,73 @@ class TestArrowBatchFullTable(unittest.TestCase):
 
 
 @unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
+class TestArrowBatchDateColumn(unittest.TestCase):
+    """A DATE column's SCHEMA message declares format: date-time same as a real
+    DATETIME/TIMESTAMP column (discover_utils.py groups them together), but its native
+    Arrow type over ADBC is date32 unless the extraction query itself casts it --
+    common.generate_select_sql does that specifically so this mismatch can't reach a
+    downstream target that trusts the declared format literally (e.g. Snowflake refusing
+    to cast a semi-structured DATE value straight to TIMESTAMP_NTZ).
+    """
+
+    def setUp(self):
+        self.conn = test_utils.get_test_connection()
+        self.singer_messages = []
+        self._write_message_patcher = patch(
+            'tap_mysql.stream_utils.write_message',
+            side_effect=self.singer_messages.append,
+        )
+        self._write_message_patcher.start()
+
+        with connect_with_backoff(self.conn) as open_conn:
+            with open_conn.cursor() as cursor:
+                cursor.execute('CREATE TABLE arrow_date (id int primary key, signup_date date)')
+                cursor.execute("INSERT INTO arrow_date (id, signup_date) VALUES (1, '2025-05-08')")
+                cursor.execute('INSERT INTO arrow_date (id, signup_date) VALUES (2, NULL)')
+
+        self.catalog = test_utils.discover_catalog(self.conn, catalog={})
+        for stream in self.catalog.streams:
+            stream.metadata = [
+                {
+                    'breadcrumb': (),
+                    'metadata': {
+                        'selected': True,
+                        'table-key-properties': ['id'],
+                        'database-name': 'tap_mysql_test',
+                    },
+                },
+                {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
+                {
+                    'breadcrumb': ('properties', 'signup_date'),
+                    'metadata': {'selected': True, 'sql-datatype': 'date'},
+                },
+            ]
+            test_utils.set_replication_method_and_key(stream, 'FULL_TABLE', None)
+
+    def tearDown(self):
+        self._write_message_patcher.stop()
+
+    def test_date_column_lands_as_timestamp_not_date32(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                tap_mysql.do_sync(
+                    self.conn,
+                    {'batch_config': {'encoding': {'format': 'arrow'}, 'storage': {'root': tmpdir}}},
+                    self.catalog,
+                    {},
+                )
+
+            [batch_message] = _read_batch_messages(out.getvalue())
+            table = _read_arrow_table(batch_message)
+
+        self.assertTrue(pa.types.is_timestamp(table.schema.field('signup_date').type))
+        rows_by_id = dict(zip(table.column('id').to_pylist(), table.column('signup_date').to_pylist()))
+        self.assertEqual(rows_by_id[1].isoformat(), '2025-05-08T00:00:00')
+        self.assertIsNone(rows_by_id[2])
+
+
+@unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
 class TestArrowBatchIncremental(unittest.TestCase):
     """Exercises INCREMENTAL sync with batch_config.encoding.format='arrow', specifically to
     verify that ADBC's MySQL driver accepts the same named-placeholder parameter style

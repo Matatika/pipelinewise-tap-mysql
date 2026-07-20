@@ -82,6 +82,12 @@ def get_database_name(catalog_entry):
     return md_map.get((), {}).get('database-name')
 
 
+def get_sql_datatype(catalog_entry, *, prop_name: str):
+    md_map = metadata.to_map(catalog_entry.metadata)
+
+    return md_map.get(('properties', prop_name), {}).get('sql-datatype')
+
+
 def generate_select_sql(catalog_entry, columns):
     database_name = get_database_name(catalog_entry)
     escaped_db = escape(database_name)
@@ -94,6 +100,7 @@ def generate_select_sql(catalog_entry, columns):
 
         # fetch the column type format from the json schema already built
         property_format = catalog_entry.schema.properties[col_name].format
+        sql_datatype = get_sql_datatype(catalog_entry, prop_name=col_name)
 
         # if the column format is binary, fetch the values after removing any trailing
         # null bytes 0x00 and hexifying the column.
@@ -103,6 +110,17 @@ def generate_select_sql(catalog_entry, columns):
         elif property_format == 'spatial':
             escaped_columns.append(
                 f'ST_AsGeoJSON({escaped_col}) as {escaped_col}')
+        elif sql_datatype == 'date':
+            # discover_utils.py groups DATE with the datetime/timestamp types, so the
+            # SCHEMA message declares this column's format as 'date-time' same as a real
+            # DATETIME/TIMESTAMP column -- but a MySQL DATE column's native Arrow type
+            # over ADBC is date32, not a timestamp type, silently mismatching that
+            # promise for BATCH/Arrow mode (row_to_singer_record's RECORD-mode path
+            # doesn't have this problem: it explicitly widens a `datetime.date` value by
+            # appending a midnight time component). Some downstream consumers trust the
+            # declared format literally and reject the mismatch outright (e.g. Snowflake
+            # refuses to cast a semi-structured DATE value straight to TIMESTAMP_NTZ).
+            escaped_columns.append(f'CAST({escaped_col} AS DATETIME) as {escaped_col}')
         else:
             escaped_columns.append(escaped_col)
 
