@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import io
 import json
 import tempfile
@@ -30,7 +31,7 @@ def _read_batch_messages(stdout_text):
     return [json.loads(line) for line in stdout_text.splitlines() if line.strip()]
 
 
-def _read_arrow_table(batch_message):
+def _read_arrow_table(batch_message) -> pa.Table:
     path = batch_message['manifest'][0].removeprefix('file://')
     return ipc.open_file(path).read_all()
 
@@ -162,14 +163,8 @@ class TestArrowBatchFullTable(unittest.TestCase):
 
 
 @unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
-class TestArrowBatchDateColumn(unittest.TestCase):
-    """A DATE column's SCHEMA message declares format: date-time same as a real
-    DATETIME/TIMESTAMP column (discover_utils.py groups them together), but its native
-    Arrow type over ADBC is date32 unless the extraction query itself casts it --
-    common.generate_select_sql does that specifically so this mismatch can't reach a
-    downstream target that trusts the declared format literally (e.g. Snowflake refusing
-    to cast a semi-structured DATE value straight to TIMESTAMP_NTZ).
-    """
+class TestArrowBatchTypes(unittest.TestCase):
+    """Check type mapping from MySQL to Arrow."""
 
     def setUp(self):
         self.conn = test_utils.get_test_connection()
@@ -182,9 +177,9 @@ class TestArrowBatchDateColumn(unittest.TestCase):
 
         with connect_with_backoff(self.conn) as open_conn:
             with open_conn.cursor() as cursor:
-                cursor.execute('CREATE TABLE arrow_date (id int primary key, signup_date date)')
-                cursor.execute("INSERT INTO arrow_date (id, signup_date) VALUES (1, '2025-05-08')")
-                cursor.execute('INSERT INTO arrow_date (id, signup_date) VALUES (2, NULL)')
+                cursor.execute('CREATE TABLE arrow_types (id int primary key, updated_at datetime, signup_date date)')
+                cursor.execute("INSERT INTO arrow_types (id, updated_at, signup_date) VALUES (1, '2025-05-08 01:23:45', '2025-05-08')")  # noqa: E501
+                cursor.execute('INSERT INTO arrow_types (id, updated_at, signup_date) VALUES (2, NULL, NULL)')
 
         self.catalog = test_utils.discover_catalog(self.conn, catalog={})
         for stream in self.catalog.streams:
@@ -197,7 +192,14 @@ class TestArrowBatchDateColumn(unittest.TestCase):
                         'database-name': 'tap_mysql_test',
                     },
                 },
-                {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
+                {
+                    'breadcrumb': ('properties', 'id'),
+                    'metadata': {'selected': True},
+                },
+                {
+                    'breadcrumb': ('properties', 'updated_at'),
+                    'metadata': {'selected': True, 'sql-datatype': 'datetime'},
+                },
                 {
                     'breadcrumb': ('properties', 'signup_date'),
                     'metadata': {'selected': True, 'sql-datatype': 'date'},
@@ -208,7 +210,7 @@ class TestArrowBatchDateColumn(unittest.TestCase):
     def tearDown(self):
         self._write_message_patcher.stop()
 
-    def test_date_column_lands_as_date32(self):
+    def test_column_types(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
@@ -222,10 +224,17 @@ class TestArrowBatchDateColumn(unittest.TestCase):
             [batch_message] = _read_batch_messages(out.getvalue())
             table = _read_arrow_table(batch_message)
 
-        self.assertTrue(pa.types.is_date32(table.schema.field('signup_date').type))
-        rows_by_id = dict(zip(table.column('id').to_pylist(), table.column('signup_date').to_pylist()))
-        self.assertEqual(rows_by_id[1].isoformat(), '2025-05-08')
-        self.assertIsNone(rows_by_id[2])
+        rows_by_id = dict(zip(table.column('id').to_pylist(), table.to_pylist()))
+
+        assert pa.types.is_timestamp(table.schema.field('updated_at').type)
+        assert isinstance(rows_by_id[1]['updated_at'], datetime.datetime)
+        assert rows_by_id[1]['updated_at'].isoformat() == '2025-05-08T01:23:45'
+        assert rows_by_id[2]['updated_at'] is None
+
+        assert pa.types.is_date32(table.schema.field('signup_date').type)
+        assert isinstance(rows_by_id[1]['signup_date'], datetime.date)
+        assert rows_by_id[1]['signup_date'].isoformat() == '2025-05-08'
+        assert rows_by_id[2]['signup_date'] is None
 
 
 @unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
