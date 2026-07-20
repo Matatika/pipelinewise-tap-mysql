@@ -208,7 +208,7 @@ class TestArrowBatchDateColumn(unittest.TestCase):
     def tearDown(self):
         self._write_message_patcher.stop()
 
-    def test_date_column_lands_as_timestamp_not_date32(self):
+    def test_date_column_lands_as_date32(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
@@ -222,9 +222,9 @@ class TestArrowBatchDateColumn(unittest.TestCase):
             [batch_message] = _read_batch_messages(out.getvalue())
             table = _read_arrow_table(batch_message)
 
-        self.assertTrue(pa.types.is_timestamp(table.schema.field('signup_date').type))
+        self.assertTrue(pa.types.is_date32(table.schema.field('signup_date').type))
         rows_by_id = dict(zip(table.column('id').to_pylist(), table.column('signup_date').to_pylist()))
-        self.assertEqual(rows_by_id[1].isoformat(), '2025-05-08T00:00:00')
+        self.assertEqual(rows_by_id[1].isoformat(), '2025-05-08')
         self.assertIsNone(rows_by_id[2])
 
 

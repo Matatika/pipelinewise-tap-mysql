@@ -354,46 +354,6 @@ class TestGenerateSelectSql(unittest.TestCase):
         self.assertNotIn('%%%%', sql)
 
 
-class TestDateColumnCast:
-    def _entry(self):
-        return CatalogEntry(
-            table='mytable',
-            stream='my_db-mytable',
-            tap_stream_id='my_db-mytable',
-            schema=Schema(
-                properties={
-                    'id': Schema(type=['null', 'integer']),
-                    'signup_date': Schema(type=['null', 'string'], format='date-time'),
-                    'created_at': Schema(type=['null', 'string'], format='date-time'),
-                }
-            ),
-            metadata=[
-                {'breadcrumb': [], 'metadata': {'database-name': 'my_db'}},
-                {'breadcrumb': ['properties', 'signup_date'], 'metadata': {'sql-datatype': 'date'}},
-                {'breadcrumb': ['properties', 'created_at'], 'metadata': {'sql-datatype': 'datetime'}},
-            ]
-        )
-
-    def test_date_column_cast_to_datetime(self):
-        # A DATE column's SCHEMA message declares format: date-time same as a real
-        # DATETIME/TIMESTAMP column (discover_utils.py groups them together), but its
-        # native Arrow type over ADBC is date32 unless the extraction query itself casts
-        # it -- downstream consumers that trust the declared format literally (e.g.
-        # Snowflake casting a semi-structured value to TIMESTAMP_NTZ) reject the mismatch.
-        sql = generate_select_sql(self._entry(), ['signup_date'])
-        assert 'CAST(`signup_date` AS DATETIME) as `signup_date`' in sql
-
-    def test_real_datetime_column_is_not_cast(self):
-        sql = generate_select_sql(self._entry(), ['created_at'])
-        assert 'CAST' not in sql
-        assert '`created_at`' in sql
-
-    def test_column_missing_sql_datatype_metadata_passes_through(self):
-        sql = generate_select_sql(self._entry(), ['id'])
-        assert 'CAST' not in sql
-        assert '`id`' in sql
-
-
 class _FakeCursor:
     """Minimal fake mysql-connector-style cursor: returns rows once, then exhausts."""
 

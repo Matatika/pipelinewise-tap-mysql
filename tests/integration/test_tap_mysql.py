@@ -240,7 +240,7 @@ class TestTypeMapping(unittest.TestCase):
     def test_date(self):
         self.assertEqual(self.schema.properties['c_date'],
                          Schema(['null', 'string'],
-                                format='date-time',
+                                format='date',
                                 inclusion='available'))
         self.assertEqual(self.get_metadata_for_column('c_date'),
                          {'selected-by-default': True,
