@@ -122,9 +122,6 @@ def row_to_singer_record(catalog_entry, version, row, columns, time_extracted_st
         if isinstance(elem, datetime.datetime):
             row_to_persist += (elem.isoformat() + '+00:00',)
 
-        elif isinstance(elem, datetime.date):
-            row_to_persist += (elem.isoformat() + 'T00:00:00+00:00',)
-
         elif isinstance(elem, datetime.timedelta):
             if property_format == 'time':
                 row_to_persist += (str(elem),) # this should convert time column into 'HH:MM:SS' formatted string
