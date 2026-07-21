@@ -313,6 +313,8 @@ def schema_for_column(column):  # pylint: disable=too-many-branches
 
         if data_type == 'time':
             result.format = 'time'
+        elif data_type == 'date':
+            result.format = 'date'
         else:
             result.format = 'date-time'
 

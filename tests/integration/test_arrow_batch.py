@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import io
 import json
 import tempfile
@@ -30,7 +31,7 @@ def _read_batch_messages(stdout_text):
     return [json.loads(line) for line in stdout_text.splitlines() if line.strip()]
 
 
-def _read_arrow_table(batch_message):
+def _read_arrow_table(batch_message) -> pa.Table:
     path = batch_message['manifest'][0].removeprefix('file://')
     return ipc.open_file(path).read_all()
 
@@ -159,6 +160,81 @@ class TestArrowBatchFullTable(unittest.TestCase):
             table = _read_arrow_table(batch_messages[0])
 
         self.assertEqual(sorted(table.column('id').to_pylist()), [1, 2, 3, 4])
+
+
+@unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
+class TestArrowBatchTypes(unittest.TestCase):
+    """Check type mapping from MySQL to Arrow."""
+
+    def setUp(self):
+        self.conn = test_utils.get_test_connection()
+        self.singer_messages = []
+        self._write_message_patcher = patch(
+            'tap_mysql.stream_utils.write_message',
+            side_effect=self.singer_messages.append,
+        )
+        self._write_message_patcher.start()
+
+        with connect_with_backoff(self.conn) as open_conn:
+            with open_conn.cursor() as cursor:
+                cursor.execute('CREATE TABLE arrow_types (id int primary key, updated_at datetime, signup_date date)')
+                cursor.execute("INSERT INTO arrow_types (id, updated_at, signup_date) VALUES (1, '2025-05-08 01:23:45', '2025-05-08')")  # noqa: E501
+                cursor.execute('INSERT INTO arrow_types (id, updated_at, signup_date) VALUES (2, NULL, NULL)')
+
+        self.catalog = test_utils.discover_catalog(self.conn, catalog={})
+        for stream in self.catalog.streams:
+            stream.metadata = [
+                {
+                    'breadcrumb': (),
+                    'metadata': {
+                        'selected': True,
+                        'table-key-properties': ['id'],
+                        'database-name': 'tap_mysql_test',
+                    },
+                },
+                {
+                    'breadcrumb': ('properties', 'id'),
+                    'metadata': {'selected': True},
+                },
+                {
+                    'breadcrumb': ('properties', 'updated_at'),
+                    'metadata': {'selected': True, 'sql-datatype': 'datetime'},
+                },
+                {
+                    'breadcrumb': ('properties', 'signup_date'),
+                    'metadata': {'selected': True, 'sql-datatype': 'date'},
+                },
+            ]
+            test_utils.set_replication_method_and_key(stream, 'FULL_TABLE', None)
+
+    def tearDown(self):
+        self._write_message_patcher.stop()
+
+    def test_column_types(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                tap_mysql.do_sync(
+                    self.conn,
+                    {'batch_config': {'encoding': {'format': 'arrow'}, 'storage': {'root': tmpdir}}},
+                    self.catalog,
+                    {},
+                )
+
+            [batch_message] = _read_batch_messages(out.getvalue())
+            table = _read_arrow_table(batch_message)
+
+        rows_by_id = dict(zip(table.column('id').to_pylist(), table.to_pylist()))
+
+        assert pa.types.is_timestamp(table.schema.field('updated_at').type)
+        assert isinstance(rows_by_id[1]['updated_at'], datetime.datetime)
+        assert rows_by_id[1]['updated_at'].isoformat() == '2025-05-08T01:23:45'
+        assert rows_by_id[2]['updated_at'] is None
+
+        assert pa.types.is_date32(table.schema.field('signup_date').type)
+        assert isinstance(rows_by_id[1]['signup_date'], datetime.date)
+        assert rows_by_id[1]['signup_date'].isoformat() == '2025-05-08'
+        assert rows_by_id[2]['signup_date'] is None
 
 
 @unittest.skipUnless(_arrow_support_available(), 'MySQL ADBC driver not installed')
