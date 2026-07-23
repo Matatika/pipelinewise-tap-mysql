@@ -434,7 +434,7 @@ def sync_query(cursor, catalog_entry, state, select_sql, columns, stream_version
     # land exactly on a checkpoint boundary.
     checkpoint = False
 
-    with metrics.record_counter(None) as counter:
+    with metrics.record_counter(log_interval=1) as counter:
         counter.tags['database'] = database_name
         counter.tags['table'] = catalog_entry.table
 
@@ -518,7 +518,7 @@ def _sync_query_arrow(mysql_conn, catalog_entry, state, select_sql, params, batc
     # to land exactly on a checkpoint boundary.
     checkpoint = False
 
-    with metrics.record_counter(None) as counter:
+    with metrics.record_counter(log_interval=1) as counter:
         counter.tags['database'] = database_name
         counter.tags['table'] = catalog_entry.table
 
