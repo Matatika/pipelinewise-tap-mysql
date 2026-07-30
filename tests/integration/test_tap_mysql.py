@@ -1283,14 +1283,27 @@ class TestEscaping(unittest.TestCase):
 
 
 class TestJsonTables(unittest.TestCase):
+    # A MySQL `json` column can hold any valid JSON document, not just objects -
+    # e.g. the JSON literal `null`, arrays, numbers, strings and booleans.
+    JSON_VALUES_BY_ID = {
+        1: '{"a": 10, "b": "c"}',
+        2: 'null',
+        3: '[1, 2, 3]',
+        4: '5',
+        5: '"hello"',
+        6: 'true',
+    }
 
     def setUp(self):
         self.conn = test_utils.get_test_connection()
 
         with connect_with_backoff(self.conn) as open_conn:
             with open_conn.cursor() as cursor:
-                cursor.execute('CREATE TABLE json_tab (val json)')
-                cursor.execute('INSERT INTO json_tab (val) VALUES ( \'{"a": 10, "b": "c"}\')')
+                cursor.execute('CREATE TABLE json_tab (id INT PRIMARY KEY, val json)')
+                for row_id, raw_json in self.JSON_VALUES_BY_ID.items():
+                    cursor.execute('INSERT INTO json_tab (id, val) VALUES (%s, %s)', (row_id, raw_json))
+                # a SQL NULL is distinct from the JSON literal `null`
+                cursor.execute('INSERT INTO json_tab (id, val) VALUES (%s, NULL)', (7,))
 
         self.catalog = test_utils.discover_catalog(self.conn, {})
         for stream in self.catalog.streams:
@@ -1298,6 +1311,7 @@ class TestJsonTables(unittest.TestCase):
 
             stream.metadata = [
                 {'breadcrumb': (), 'metadata': {'selected': True, 'database-name': 'tap_mysql_test'}},
+                {'breadcrumb': ('properties', 'id'), 'metadata': {'selected': True}},
                 {'breadcrumb': ('properties', 'val'), 'metadata': {'selected': True}}
             ]
 
@@ -1309,9 +1323,18 @@ class TestJsonTables(unittest.TestCase):
         SINGER_MESSAGES.clear()
         tap_mysql.do_sync(self.conn, {}, self.catalog, {})
 
-        record_message = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))[0]
-        self.assertTrue(isinstance(record_message, singer.RecordMessage))
-        self.assertEqual(record_message.record, {'val': '{"a": 10, "b": "c"}'})
+        record_messages = list(filter(lambda m: isinstance(m, singer.RecordMessage), SINGER_MESSAGES))
+        records_by_id = {m.record['id']: m.record for m in record_messages}
+
+        self.assertEqual(len(records_by_id), len(self.JSON_VALUES_BY_ID) + 1)
+
+        for row_id, expected in self.JSON_VALUES_BY_ID.items():
+            with self.subTest(row_id=row_id):
+                self.assertEqual(records_by_id[row_id]['val'], expected)
+
+        # a SQL NULL value should be surfaced as None, not the string "null"
+        with self.subTest(row_id=7):
+            self.assertIsNone(records_by_id[7]['val'])
 
 
 class TestSupportedPK(unittest.TestCase):
