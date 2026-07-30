@@ -6,6 +6,7 @@
   "filter_db": "db1,db2",
   "engine": "<mysql|mariadb>",
   "use_gtid": <boolean>,
+  "json_as_type": "<object|string>",
   "cursorclass": "<pymysql cursor Class>"
   "server_id": "",
   "database": "",

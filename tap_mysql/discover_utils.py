@@ -151,7 +151,11 @@ def should_run_discovery(column_names: Set[str], md_map: Dict[Tuple, Dict]) -> b
     return False
 
 
-def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optional[str] = None):
+JSON_AS_TYPES = {'object', 'string'}
+
+
+def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optional[str] = None,
+                      json_as_type: str = 'object'):
     """Returns a Catalog describing the structure of the database."""
 
     if dbs:
@@ -221,7 +225,7 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
                 (table_schema, table_name) = k
 
                 schema = Schema(type='object',
-                                properties={c.column_name: schema_for_column(c) for c in cols})
+                                properties={c.column_name: schema_for_column(c, json_as_type) for c in cols})
                 mdata = create_column_metadata(cols)
                 md_map = metadata.to_map(mdata)
 
@@ -269,8 +273,11 @@ def discover_catalog(mysql_conn: MySQLConnection, dbs: str = None, tables: Optio
     return Catalog(entries)
 
 
-def schema_for_column(column):  # pylint: disable=too-many-branches
+def schema_for_column(column, json_as_type='object'):  # pylint: disable=too-many-branches
     """Returns the Schema object for the given Column."""
+
+    if json_as_type not in JSON_AS_TYPES:
+        raise ValueError(f"json_as_type must be one of {sorted(JSON_AS_TYPES)}, got {json_as_type!r}")
 
     data_type = _normalize_data_type(column.data_type.lower())
     column_type = column.column_type.lower()
@@ -302,10 +309,11 @@ def schema_for_column(column):  # pylint: disable=too-many-branches
             result.multipleOf = 10 ** (0 - column.numeric_scale)
 
     elif data_type in JSON_TYPES:
-        # Column values are streamed as the raw JSON text (not parsed), and a MySQL `json`
-        # column may hold any valid JSON document - not just objects - so `string` is the
-        # only type that matches every value actually emitted.
-        result.type = ['null', 'string']
+        # Column values are streamed as the raw JSON text (not parsed), so a schema type of
+        # `object` doesn't match every value a MySQL `json` column may hold (e.g. arrays,
+        # scalars, or the JSON literal `null`) - `json_as_type` lets callers opt into `string`,
+        # which matches what is actually emitted.
+        result.type = ['null', json_as_type]
 
     elif data_type in STRING_TYPES:
         result.type = ['null', 'string']
