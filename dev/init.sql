@@ -58,3 +58,18 @@ cross join (select 0 as n union all select 1 union all select 2 union all select
 cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) e
 cross join (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4) f
 where a.n + b.n * 10 + c.n * 100 + d.n * 1000 + e.n * 10000 + f.n * 100000 < 500000;
+
+# a `json` column can hold any valid JSON document, not just objects
+create table json_values_test (
+    id int auto_increment primary key,
+    val json
+);
+
+insert into json_values_test (val) values
+    ('{"a": 10, "b": "c"}'),
+    ('null'),
+    ('[1, 2, 3]'),
+    ('5'),
+    ('"hello"'),
+    ('true'),
+    (NULL);

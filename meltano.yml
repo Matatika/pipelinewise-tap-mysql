@@ -72,8 +72,11 @@ plugins:
           format: arrow
         batch_size: 100000
     select:
+    - tap_mysql_test-json_values_test.*
     - tap_mysql_test-perf_test.*
     metadata:
+      tap_mysql_test-json_values_test:
+        replication-method: FULL_TABLE
       tap_mysql_test-perf_test:
         replication-method: FULL_TABLE
   loaders:

@@ -302,7 +302,10 @@ def schema_for_column(column):  # pylint: disable=too-many-branches
             result.multipleOf = 10 ** (0 - column.numeric_scale)
 
     elif data_type in JSON_TYPES:
-        result.type = ['null', 'object']
+        # Column values are streamed as the raw JSON text (not parsed), and a MySQL `json`
+        # column may hold any valid JSON document - not just objects - so `string` is the
+        # only type that matches every value actually emitted.
+        result.type = ['null', 'string']
 
     elif data_type in STRING_TYPES:
         result.type = ['null', 'string']
