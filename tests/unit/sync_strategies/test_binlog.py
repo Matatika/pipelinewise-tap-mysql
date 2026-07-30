@@ -614,8 +614,8 @@ class TestBinlogSyncStrategy(TestCase):
                 )
 
                 discover_catalog_mock.assert_has_calls([
-                    call(mysql_con, None, 'stream1'),
-                    call(mysql_con, None, 'stream2'),
+                    call(mysql_con, None, 'stream1', json_as_type='object'),
+                    call(mysql_con, None, 'stream2', json_as_type='object'),
                 ], any_order=False)
 
                 self.assertListEqual([type(msg) for msg in singer_messages], [
@@ -1402,8 +1402,8 @@ class TestBinlogSyncStrategy(TestCase):
                 )
 
                 discover_catalog_mock.assert_has_calls([
-                    call(mysql_con, None, 'stream1'),
-                    call(mysql_con, None, 'stream2'),
+                    call(mysql_con, None, 'stream1', json_as_type='object'),
+                    call(mysql_con, None, 'stream2', json_as_type='object'),
                 ], any_order=False)
 
                 self.assertListEqual([type(msg) for msg in singer_messages], [

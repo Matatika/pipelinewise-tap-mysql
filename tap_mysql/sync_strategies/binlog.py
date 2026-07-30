@@ -715,9 +715,11 @@ def _run_binlog_sync(
                         LOGGER.info('Stream `%s`: Running discovery ... ', tap_stream_id)
 
                         # run discovery for the current table only
-                        new_catalog_entry = discover_catalog(mysql_conn,
-                                                             config.get('filter_dbs'),
-                                                             catalog_entry.table).streams[0]
+                        new_catalog_entry = discover_catalog(
+                            mysql_conn,
+                            config.get('filter_dbs'),
+                            catalog_entry.table,
+                            json_as_type=config.get('json_as_type', 'object')).streams[0]
 
                         selected = {k for k, v in new_catalog_entry.schema.properties.items()
                                     if common.property_is_selected(new_catalog_entry, k)}
