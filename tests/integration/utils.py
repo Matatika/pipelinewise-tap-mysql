@@ -50,7 +50,8 @@ def get_test_connection(extra_config=None):
 
 
 def discover_catalog(connection, catalog):
-    catalog = tap_mysql.discover_catalog(connection, catalog.get('filter_dbs'))
+    catalog = tap_mysql.discover_catalog(connection, catalog.get('filter_dbs'),
+                                          json_as_type=catalog.get('json_as_type', 'object'))
     streams = []
 
     for stream in catalog.streams:
