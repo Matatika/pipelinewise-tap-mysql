@@ -1354,15 +1354,24 @@ class TestBinlogEventWithoutColumnNames(unittest.TestCase):
         global SINGER_MESSAGES
         SINGER_MESSAGES.clear()
 
-        with connect_with_backoff(self.conn) as open_conn:
-            with open_conn.cursor() as cursor:
-                cursor.execute('SET GLOBAL binlog_row_metadata = MINIMAL')
-                cursor.execute('CREATE TABLE orgs (id int PRIMARY KEY, name varchar(255), seat_count int)')
-            open_conn.commit()
-
-        log_file, log_pos = binlog.fetch_current_log_file_and_pos(self.conn)
+        # Needs the privilege for global variables, which conftest grants, and a server new enough
+        # to have the variable
+        try:
+            with connect_with_backoff(self.conn) as open_conn:
+                with open_conn.cursor() as cursor:
+                    cursor.execute('SET GLOBAL binlog_row_metadata = MINIMAL')
+                open_conn.commit()
+        except mysql.connector.errors.Error as ex:
+            self.skipTest(f'cannot set binlog_row_metadata on this server: {ex}')
 
         try:
+            with connect_with_backoff(self.conn) as open_conn:
+                with open_conn.cursor() as cursor:
+                    cursor.execute('CREATE TABLE orgs (id int PRIMARY KEY, name varchar(255), seat_count int)')
+                open_conn.commit()
+
+            log_file, log_pos = binlog.fetch_current_log_file_and_pos(self.conn)
+
             with connect_with_backoff(self.conn) as open_conn:
                 with open_conn.cursor() as cursor:
                     cursor.execute("INSERT INTO orgs VALUES (1, 'acme', 42)")

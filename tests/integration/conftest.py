@@ -58,10 +58,15 @@ def mysql_container():
         port = int(container.get_exposed_port(3306))
 
         # The entrypoint only grants privileges on DB_NAME; the tests also read
-        # the binlog and drop/recreate the test database
+        # the binlog, drop/recreate the test database, and change binlog_row_metadata to check what
+        # the tap does with an event that carries no column names. MySQL and MariaDB give the
+        # privilege for global variables a different name.
+        set_global_privilege = 'BINLOG ADMIN' if engine == MARIADB_ENGINE else 'SYSTEM_VARIABLES_ADMIN'
+
         with pymysql.connect(host=host, port=port, user='root', password=DB_ROOT_PASSWORD) as conn:
             with conn.cursor() as cur:
                 cur.execute(f"GRANT REPLICATION CLIENT, REPLICATION SLAVE ON *.* TO '{DB_USER}'@'%'")
+                cur.execute(f"GRANT {set_global_privilege} ON *.* TO '{DB_USER}'@'%'")
             conn.commit()
 
         os.environ['TAP_MYSQL_HOST'] = host
