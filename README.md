@@ -8,6 +8,37 @@
 
 This is a [PipelineWise](https://transferwise.github.io/pipelinewise) compatible tap connector.
 
+## Upgrading to 2.0
+
+Version 2.0 changes how LOG_BASED replication maps the values of a binlog event to columns. It
+takes the column names from the binlog event itself, where earlier versions read them from the table
+definition as it was at the time of the sync. This puts the values of an event that MySQL wrote
+before a schema change in the right columns, where earlier versions moved them along by one and
+dropped the last one. See [LOG_BASED](#log_based) for the detail.
+
+FULL_TABLE and INCREMENTAL replication do not change.
+
+**Do these two things before you upgrade a LOG_BASED pipeline:**
+
+1. **Set `binlog_row_metadata` to `FULL` on the source server.** No server defaults to it. See
+   [Required server settings](#required-server-settings). Without it the tap warns, keeps
+   replicating, and stops at an event whose values it cannot place.
+2. **Re-sync the affected streams with FULL_TABLE once.** The events that MySQL has already written
+   carry no column names, so the tap stops at each one until the stream gets past them.
+
+**Three changes to be ready for:**
+
+| Change | What to do |
+|--------|------------|
+| A LOG_BASED sync now stops with an error at an event whose values it cannot place, where it used to emit them into the wrong columns. This happens on a server without `binlog_row_metadata = FULL` when a column is added to or dropped from the middle of a table. | Set `binlog_row_metadata` to `FULL`, then re-sync the stream with FULL_TABLE. |
+| A column **rename** now leaves the value out of the records of the events that MySQL wrote before the rename, because those events carry the old name of the column. Earlier versions mapped the value onto the new name by position. | Re-sync the stream with FULL_TABLE after a rename. |
+| A `char`, `varchar` or `text` column that the MySQL client returns as bytes now comes out as a readable string. Earlier versions encoded it as hex and padded it, as if it were a `binary` column. | Nothing, unless a target already holds the hex form of such a column. Re-sync the stream with FULL_TABLE to replace it. |
+
+LOG_BASED replication now needs **MySQL 8.0.14 or later, or MariaDB 10.5 or later**, because it needs
+the `binlog_row_metadata` system variable. On an older server the tap warns and keeps replicating the
+way it did before. Replicate those streams with FULL_TABLE or INCREMENTAL to avoid the risk
+altogether, as neither reads the binlog.
+
 ## How to use it
 
 The recommended method of running this tap is to use it from [PipelineWise](https://transferwise.github.io/pipelinewise). When running it from PipelineWise you don't need to configure this tap with JSON files and most of things are automated. Please check the related documentation at [Tap MySQL](https://transferwise.github.io/pipelinewise/connectors/taps/mysql.html)
