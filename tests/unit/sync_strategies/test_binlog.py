@@ -7,7 +7,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock, Mock, call, patch
 
 import pytz
-from mysql.connector.errors import InternalError
+from mysql.connector.errors import DatabaseError
 from pymysqlreplication.constants import FIELD_TYPE
 from pymysqlreplication.event import GtidEvent, MariadbGtidEvent, RotateEvent
 from pymysqlreplication.row_event import DeleteRowsEvent, UpdateRowsEvent, WriteRowsEvent
@@ -60,6 +60,85 @@ class TestBinlogSyncStrategy(TestCase):
 
         self.assertListEqual(['x', binlog.SDC_DELETED_AT], columns)
 
+    def test_verify_event_column_names_passes_when_the_event_names_every_column(self):
+        event = get_binlogevent(WriteRowsEvent, {
+            'columns': [Column('id', FIELD_TYPE.INT24), Column('name', FIELD_TYPE.VARCHAR)],
+            'rows': [{'values': {'id': 1, 'name': 'acme'}}]
+        })
+
+        # Returns without raising
+        self.assertIsNone(binlog.verify_event_column_names(event, 'db-stream', 'binlog0001', 50))
+
+    def test_verify_event_column_names_fails_when_a_column_has_no_name(self):
+        event = get_binlogevent(WriteRowsEvent, {
+            'columns': [Column('id', FIELD_TYPE.INT24), Column(None, FIELD_TYPE.VARCHAR)],
+            'rows': [{'values': {'id': 1, 'UNKNOWN_COL1': 'acme'}}]
+        })
+
+        with self.assertRaises(Exception) as context:
+            binlog.verify_event_column_names(event, 'db-stream', 'binlog0001', 50)
+
+        self.assertIn('the values of the binlog event at binlog0001:50 cannot be mapped to columns safely',
+                      str(context.exception))
+        self.assertIn('1 of 2 columns have no name', str(context.exception))
+
+    def test_verify_event_column_names_fails_on_the_placeholder_name(self):
+        event = get_binlogevent(WriteRowsEvent, {
+            'columns': [Column('UNKNOWN_COL0', FIELD_TYPE.INT24),
+                        Column('UNKNOWN_COL1', FIELD_TYPE.VARCHAR)],
+            'rows': [{'values': {'UNKNOWN_COL0': 1, 'UNKNOWN_COL1': 'acme'}}]
+        })
+
+        with self.assertRaises(Exception) as context:
+            binlog.verify_event_column_names(event, 'db-stream', 'binlog0001', 50)
+
+        self.assertIn('2 of 2 columns have no name', str(context.exception))
+
+    def test_verify_event_column_names_keeps_a_column_named_like_the_placeholder(self):
+        """A real column whose name only starts with the placeholder text must not trip the check."""
+        event = get_binlogevent(WriteRowsEvent, {
+            'columns': [Column('UNKNOWN_COLUMN', FIELD_TYPE.VARCHAR)],
+            'rows': [{'values': {'UNKNOWN_COLUMN': 'acme'}}]
+        })
+
+        self.assertIsNone(binlog.verify_event_column_names(event, 'db-stream', 'binlog0001', 50))
+
+    def test_row_to_singer_record_hexifies_and_pads_a_binary_column(self):
+        catalog_entry = CatalogEntry(
+            tap_stream_id='db-stream',
+            stream='db-stream',
+            schema=Schema(properties={'c_binary': Schema(type=['null', 'string'], format='binary')}))
+
+        BinaryColumn = namedtuple('BinaryColumn', ['name', 'type', 'max_length'])
+        db_column_map = {'c_binary': BinaryColumn('c_binary', FIELD_TYPE.STRING, 8)}
+
+        # mysql-replication strips the null bytes that MySQL uses to pad a BINARY(8) value
+        record_message = binlog.row_to_singer_record(
+            catalog_entry, 1, db_column_map, {'c_binary': b'\xde\xad\xbe\xef'}, '2026-01-01T00:00:00Z')
+
+        self.assertEqual({'c_binary': 'deadbeef00000000'}, record_message.record)
+
+    def test_row_to_singer_record_decodes_a_string_column_returned_as_bytes(self):
+        """
+        mysql-replication can return the value of a character column as bytes. Such a value must
+        stay a readable string, the same as the FULL_TABLE path returns it, and must not get
+        hexified and padded as if the column were BINARY(N).
+        """
+        catalog_entry = CatalogEntry(
+            tap_stream_id='db-stream',
+            stream='db-stream',
+            schema=Schema(properties={'c_varchar': Schema(type=['null', 'string'])}))
+
+        VarcharColumn = namedtuple('VarcharColumn', ['name', 'type', 'max_length'])
+        db_column_map = {'c_varchar': VarcharColumn('c_varchar', FIELD_TYPE.VARCHAR, 255)}
+
+        record_message = binlog.row_to_singer_record(
+            catalog_entry, 1, db_column_map, {'c_varchar': b'org_rkclygng9gvzzlh'},
+            '2026-01-01T00:00:00Z')
+
+        self.assertEqual({'c_varchar': 'org_rkclygng9gvzzlh'}, record_message.record)
+
+    @patch('tap_mysql.sync_strategies.binlog.verify_binlog_config', return_value=False)
     @patch('tap_mysql.sync_strategies.binlog.calculate_bookmark',
            return_value=('binlog0001', 50))
     @patch('tap_mysql.sync_strategies.binlog.fetch_current_log_file_and_pos',
@@ -840,6 +919,7 @@ class TestBinlogSyncStrategy(TestCase):
 
                 self.assertEqual(1, reader_mock.return_value.close.call_count)
 
+    @patch('tap_mysql.sync_strategies.binlog.verify_binlog_config', return_value=False)
     @patch('tap_mysql.sync_strategies.binlog.calculate_gtid_bookmark',
            return_value='0-123-555')
     @patch('tap_mysql.sync_strategies.binlog.fetch_current_log_file_and_pos',
@@ -1636,6 +1716,7 @@ class TestBinlogSyncStrategy(TestCase):
         cur_mock = MagicMock().return_value
         cur_mock.__enter__.return_value.fetchone.side_effect = [
             ['ROW'],
+            ['FULL'],
             ['FULL']
         ]
 
@@ -1650,8 +1731,104 @@ class TestBinlogSyncStrategy(TestCase):
             [
                 call('SELECT  @@binlog_format'),
                 call('SELECT  @@binlog_row_image'),
+                call('SELECT  @@binlog_row_metadata'),
             ]
         )
+
+    @patch('tap_mysql.sync_strategies.binlog.connect_with_backoff')
+    def test_verify_binlog_config_warns_if_binlog_row_metadata_not_FULL(self, connect_with_backoff):
+        """
+        A server that can write the column names but is not set to 'FULL' keeps replicating the way
+        it did before, so that this is not a breaking change. The tap warns and names the fix.
+        """
+        mysql_con = MagicMock(spec_set=MySQLConnection).return_value
+
+        cur_mock = MagicMock().return_value
+        cur_mock.__enter__.return_value.fetchone.side_effect = [
+            ['ROW'],
+            ['FULL'],
+            ['MINIMAL']
+        ]
+
+        mysql_con.__enter__.return_value.cursor.return_value = cur_mock
+
+        connect_with_backoff.return_value = mysql_con
+
+        with patch('tap_mysql.sync_strategies.binlog.LOGGER') as logger_mock:
+            legacy_column_mapping = binlog.verify_binlog_config(mysql_con)
+
+        self.assertTrue(legacy_column_mapping)
+        self.assertEqual(1, logger_mock.warning.call_count)
+        self.assertIn('MINIMAL', logger_mock.warning.call_args.args)
+
+        connect_with_backoff.assert_called_with(mysql_con)
+        cur_mock.__enter__.return_value.execute.assert_has_calls(
+            [
+                call('SELECT  @@binlog_format'),
+                call('SELECT  @@binlog_row_image'),
+                call('SELECT  @@binlog_row_metadata'),
+            ]
+        )
+
+    @patch('tap_mysql.sync_strategies.binlog.connect_with_backoff')
+    def test_verify_binlog_config_falls_back_if_binlog_row_metadata_not_supported(self, connect_with_backoff):
+        """
+        A server older than MySQL 8.0.14 or MariaDB 10.5 has no binlog_row_metadata variable, so it
+        cannot put the column names in the binlog whatever the settings are. The tap keeps
+        replicating the way it did before, and warns about the risk.
+        """
+        mysql_con = MagicMock(spec_set=MySQLConnection).return_value
+
+        cur_mock = MagicMock().return_value
+        cur_mock.__enter__.return_value.fetchone.side_effect = [
+            ['ROW'],
+            ['FULL'],
+        ]
+
+        cur_mock.__enter__.return_value.execute.side_effect = [
+            None,
+            None,
+            DatabaseError(errno=1193)
+        ]
+
+        mysql_con.__enter__.return_value.cursor.return_value = cur_mock
+
+        connect_with_backoff.return_value = mysql_con
+
+        with patch('tap_mysql.sync_strategies.binlog.LOGGER') as logger_mock:
+            legacy_column_mapping = binlog.verify_binlog_config(mysql_con)
+
+        self.assertTrue(legacy_column_mapping)
+        self.assertEqual(1, logger_mock.warning.call_count)
+
+        connect_with_backoff.assert_called_with(mysql_con)
+        cur_mock.__enter__.return_value.execute.assert_has_calls(
+            [
+                call('SELECT  @@binlog_format'),
+                call('SELECT  @@binlog_row_image'),
+                call('SELECT  @@binlog_row_metadata'),
+            ]
+        )
+
+    @patch('tap_mysql.sync_strategies.binlog.make_connection_wrapper')
+    @patch('tap_mysql.sync_strategies.binlog.BinLogStreamReader')
+    def test_create_binlog_stream_reader_reads_names_from_the_event_by_default(self, reader_mock, _):
+        config = {'engine': 'mysql', 'use_gtid': False, 'server_id': 1}
+
+        binlog.create_binlog_stream_reader(config, 'binlog0001', 4, None)
+
+        # mysql-replication takes the column names from the binlog event, so it must not fall back
+        # to the table definition as it is now
+        self.assertNotIn('use_column_name_cache', reader_mock.call_args.kwargs)
+
+    @patch('tap_mysql.sync_strategies.binlog.make_connection_wrapper')
+    @patch('tap_mysql.sync_strategies.binlog.BinLogStreamReader')
+    def test_create_binlog_stream_reader_reads_names_from_the_table_for_an_old_server(self, reader_mock, _):
+        config = {'engine': 'mysql', 'use_gtid': False, 'server_id': 1}
+
+        binlog.create_binlog_stream_reader(config, 'binlog0001', 4, None, legacy_column_mapping=True)
+
+        self.assertTrue(reader_mock.call_args.kwargs['use_column_name_cache'])
 
     @patch('tap_mysql.sync_strategies.binlog.connect_with_backoff')
     def test_verify_binlog_config_fail_if_not_FULL(self, connect_with_backoff):
@@ -1721,7 +1898,7 @@ class TestBinlogSyncStrategy(TestCase):
 
         cur_mock.__enter__.return_value.execute.side_effect = [
             None,
-            InternalError(errno=1193)
+            DatabaseError(errno=1193)
         ]
 
         mysql_con.__enter__.return_value.cursor.return_value = cur_mock
@@ -1732,8 +1909,7 @@ class TestBinlogSyncStrategy(TestCase):
             binlog.verify_binlog_config(mysql_con)
 
         self.assertEqual("Unable to replicate binlog stream because binlog_row_image "
-                         "system variable does not exist. MySQL version must be at "
-                         "least 5.6.2 to use binlog replication.",
+                         f"system variable does not exist. {binlog.MIN_SERVER_VERSION_MESSAGE}",
                          str(context.exception))
 
         connect_with_backoff.assert_called_with(mysql_con)

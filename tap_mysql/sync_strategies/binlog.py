@@ -40,6 +40,29 @@ MYSQL_TIMESTAMP_TYPES = {
     FIELD_TYPE.TIMESTAMP2
 }
 
+# The placeholder name that mysql-replication gives to a column when the binlog event does not
+# carry the column names of the table. See pymysqlreplication.row_event.RowsEvent.
+UNKNOWN_COLUMN_PATTERN = re.compile(r'^UNKNOWN_COL\d+$')
+
+# Binlog replication itself needs the binlog_row_image system variable, which MySQL added in 5.6.2.
+MIN_SERVER_VERSION_MESSAGE = 'MySQL version must be at least 5.6.2 to use binlog replication.'
+
+# Safe column mapping needs the binlog_row_metadata system variable, which carries the column names
+# of a table in the binlog event itself. mysql-replication supports it from MySQL 8.0.14 and
+# MariaDB 10.5.0 on. An older server cannot put the column names in the binlog at all, so the tap
+# falls back to reading them from the table definition as it is now. See verify_binlog_config.
+SAFE_COLUMN_MAPPING_VERSION_MESSAGE = ('MySQL version must be at least 8.0.14, or MariaDB at least '
+                                       '10.5, for the tap to map row values to columns safely '
+                                       'across a schema change.')
+
+# What goes wrong when the binlog does not hold the column names of a table. Every warning about
+# column mapping uses this one sentence, to describe the risk the same way each time.
+COLUMN_MAPPING_RISK_MESSAGE = (
+    'The tap reads the column names from the table definition as it is now instead, and stops at an '
+    'event whose values it cannot place. It counts the columns to find those events, so it cannot '
+    'detect a change that keeps the number of columns the same, such as moving a column. The values '
+    'of an event that MySQL wrote before such a change go to the wrong columns.')
+
 
 def add_automatic_properties(catalog_entry, columns):
     catalog_entry.schema.properties[SDC_DELETED_AT] = Schema(
@@ -52,7 +75,14 @@ def add_automatic_properties(catalog_entry, columns):
     return columns
 
 
-def verify_binlog_config(mysql_conn):
+def verify_binlog_config(mysql_conn) -> bool:
+    """
+    Check that the source server can stream binlog events that the tap is able to read.
+
+    Returns: True if the server is too old to put the column names of a table in the binlog, so the
+    tap has to read them from the table definition as it is now. False if the server puts the column
+    names in the binlog, which is the safe way.
+    """
     with connect_with_backoff(mysql_conn) as open_conn:
         with open_conn.cursor() as cur:
             cur.execute("SELECT  @@binlog_format")
@@ -65,16 +95,52 @@ def verify_binlog_config(mysql_conn):
             try:
                 cur.execute("SELECT  @@binlog_row_image")
                 binlog_row_image = cur.fetchone()[0]
-            except mysql.connector.errors.InternalError as ex:
+            # A server that does not have the variable raises DatabaseError, not InternalError, so
+            # catch the base class and go by the error number
+            except mysql.connector.errors.Error as ex:
                 if ex.errno == 1193:
                     raise Exception("Unable to replicate binlog stream because binlog_row_image "
-                                    "system variable does not exist. MySQL version must be at "
-                                    "least 5.6.2 to use binlog replication.") from ex
+                                    f"system variable does not exist. {MIN_SERVER_VERSION_MESSAGE}") from ex
                 raise ex
 
             if binlog_row_image != 'FULL':
                 raise Exception(f"Unable to replicate binlog stream because binlog_row_image is "
                                 f"not set to 'FULL': {binlog_row_image}.")
+
+            try:
+                cur.execute("SELECT  @@binlog_row_metadata")
+                binlog_row_metadata = cur.fetchone()[0]
+            except mysql.connector.errors.Error as ex:
+                if ex.errno != 1193:
+                    raise ex
+
+                # The server is too old to have the variable, so it cannot put the column names in
+                # the binlog whatever the settings are. Keep replicating the way the tap did before
+                # it read the names from the event, and say what the risk is.
+                LOGGER.warning(
+                    'This server does not have the binlog_row_metadata system variable, so the '
+                    'binlog does not record which column a row value belongs to. %s %s Upgrade the '
+                    'server and set binlog_row_metadata to FULL to remove this risk, or replicate '
+                    'these streams with FULL_TABLE or INCREMENTAL, which do not read the binlog.',
+                    COLUMN_MAPPING_RISK_MESSAGE, SAFE_COLUMN_MAPPING_VERSION_MESSAGE)
+
+                return True
+
+            # A binlog row event holds a positional row image only. MySQL writes the column names of
+            # the table into the binlog itself just for 'FULL'. This server is able to write them,
+            # so the fix is a one line change on the server. Warn instead of stopping the sync,
+            # to keep the behaviour of the tap the same as it was for a server set up this way.
+            if binlog_row_metadata != 'FULL':
+                LOGGER.warning(
+                    "binlog_row_metadata is set to '%s', not 'FULL', so the binlog does not record "
+                    'which column a row value belongs to. %s Run '
+                    '"SET GLOBAL binlog_row_metadata = FULL" on the source server, and put it in '
+                    'the server configuration to keep it across a restart, to remove this risk.',
+                    binlog_row_metadata, COLUMN_MAPPING_RISK_MESSAGE)
+
+                return True
+
+            return False
 
 
 def verify_gtid_config(mysql_conn: MySQLConnection):
@@ -246,9 +312,13 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
             else:
                 row_to_persist[column_name] = None
 
-        elif isinstance(val, bytes):
-            # encode bytes as hex; pad to column's declared max_length for BINARY(N) columns
-            # (mysql-replication 1.0.x strips trailing null bytes from BINARY values)
+        elif property_format == 'binary' and isinstance(val, bytes):
+            # Encode bytes as hex to match the FULL_TABLE path, which selects the column
+            # as `hex(col)`. Pad to the column's declared max_length because
+            # mysql-replication strips the trailing null bytes that MySQL uses to pad a
+            # BINARY(N) value, while `hex(col)` keeps them.
+            # Only `binary` and `varbinary` columns get format == 'binary', so a
+            # character column never reaches this branch.
             hex_val = codecs.encode(val, 'hex').decode('utf-8')
             max_length = getattr(db_column, 'max_length', None)
             if max_length is not None:
@@ -258,13 +328,20 @@ def row_to_singer_record(catalog_entry, version, db_column_map, row, time_extrac
         elif 'boolean' in property_type or property_type == 'boolean':
             if val is None:
                 boolean_representation = None
-            elif val == 0:
+            elif val in (0, b'\x00'):
                 boolean_representation = False
             elif db_column_type == FIELD_TYPE.BIT:
-                boolean_representation = int(val) != 0
+                boolean_representation = int.from_bytes(val, 'big') != 0 \
+                    if isinstance(val, bytes) else int(val) != 0
             else:
                 boolean_representation = True
             row_to_persist[column_name] = boolean_representation
+
+        elif isinstance(val, bytes):
+            # mysql-replication can return the value of a character column as bytes,
+            # depending on the column charset. The FULL_TABLE path gets a str from the
+            # MySQL client for the same column, so decode here to keep both paths equal.
+            row_to_persist[column_name] = val.decode('utf-8', errors='replace')
 
         else:
             row_to_persist[column_name] = val
@@ -599,6 +676,48 @@ def __get_diff_in_columns_list(
     return set(binlog_columns_filtered).difference(schema_properties)
 
 
+def verify_event_column_names(
+        binlog_event: Union[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent],
+        tap_stream_id: str,
+        log_file: str,
+        log_pos: int) -> None:
+    """
+    Make sure the event carries the column names of the table.
+
+    mysql-replication takes the column names of a row event from the event itself, which MySQL
+    writes only while binlog_row_metadata is 'FULL'. Where MySQL did not write them, the library
+    falls back to the table definition as it is now, and it uses those names only while the table
+    still has as many columns as the event holds. A count that does not match means the table gained
+    or lost a column after MySQL wrote the event, so mapping the values by position would put them
+    in the wrong columns. Either way the event has no usable names, and the tap must not emit it.
+
+    Check this BEFORE reading the rows of the event. mysql-replication fills in the missing names by
+    position while it reads them, which hides the mismatch and gives every value the wrong name.
+
+    Args:
+        binlog_event: Row type binlog event
+        tap_stream_id: stream id, for the error message
+        log_file: binlog file of the event, for the error message
+        log_pos: binlog position of the event, for the error message
+
+    Returns: None if the event carries all of its column names
+
+    """
+    unnamed_columns = [i for i, col in enumerate(binlog_event.columns)
+                       if col.name is None or UNKNOWN_COLUMN_PATTERN.match(col.name)]
+
+    if not unnamed_columns:
+        return
+
+    raise Exception(
+        f"Stream `{tap_stream_id}`: the values of the binlog event at {log_file}:{log_pos} cannot be "
+        f"mapped to columns safely, so the tap does not emit it ({len(unnamed_columns)} of "
+        f"{len(binlog_event.columns)} columns have no name). Either MySQL wrote the event while "
+        f"binlog_row_metadata was not 'FULL', or the table gained or lost a column after MySQL wrote "
+        f"it. Set binlog_row_metadata to 'FULL' on the source server, then re-sync this stream with "
+        f"FULL_TABLE to get past the events that MySQL has already written.")
+
+
 # pylint: disable=R1702,R0915
 def _run_binlog_sync(
         mysql_conn: MySQLConnection,
@@ -693,6 +812,10 @@ def _run_binlog_sync(
                                  events_skipped,
                                  processed_rows_events)
             else:
+                # Refuse to map an event that does not carry the column names of the table,
+                # because every value would go to the wrong column or get dropped
+                verify_event_column_names(binlog_event, tap_stream_id, log_file, log_pos)
+
                 # Compare event's columns to the schema properties
                 diff = __get_diff_in_columns_list(binlog_event,
                                                   catalog_entry.schema.properties.keys(),
@@ -750,6 +873,27 @@ def _run_binlog_sync(
                             binlog_streams_map[tap_stream_id]['catalog_entry'] = new_catalog_entry
                             binlog_streams_map[tap_stream_id]['desired_columns'] = new_columns
                             columns = new_columns
+
+                        # A column that discovery does not find at all no longer exists in the
+                        # table, so MySQL wrote this event before a rename or a drop. The value
+                        # has no column to go to, and the tap leaves it out of the record. Say so,
+                        # because a dropped value is easy to mistake for an empty one.
+                        vanished_columns = diff.difference(cols)
+
+                        if vanished_columns:
+                            LOGGER.warning(
+                                'Stream `%s`: column(s) %s of the binlog event at %s:%s are not in the table '
+                                'any more, so the tap leaves their values out of the record. MySQL wrote this '
+                                'event before the column(s) were renamed or dropped. Re-sync this stream with '
+                                'FULL_TABLE to bring those values across.',
+                                tap_stream_id, sorted(vanished_columns), log_file, log_pos)
+
+                        # Discovery cannot place any of these columns, so ignore them from here on.
+                        # Without this, every later event that holds one of them runs discovery again.
+                        unresolved_columns = diff.difference(new_catalog_entry.schema.properties)
+
+                        if unresolved_columns:
+                            ignored_columns = ignored_columns.union(unresolved_columns)
 
                 if isinstance(binlog_event, WriteRowsEvent):
                     processed_rows_events = handle_write_rows_event(binlog_event,
@@ -813,7 +957,8 @@ def create_binlog_stream_reader(
         config: Dict,
         log_file: Optional[str],
         log_pos: Optional[int],
-        gtid_pos: Optional[str]
+        gtid_pos: Optional[str],
+        legacy_column_mapping: bool = False
 ) -> BinLogStreamReader:
     """
     Create an instance of BinlogStreamReader with the right config
@@ -823,6 +968,8 @@ def create_binlog_stream_reader(
         log_file: binlog file name to start replication from (Optional if using gtid)
         log_pos: binlog pos to start replication from (Optional if using gtid)
         gtid_pos: GTID pos to start replication from (Optional if using log_file & pos)
+        legacy_column_mapping: True if the server cannot put the column names in the binlog, so
+            mysql-replication has to read them from the table definition as it is now
 
     Returns: Instance of BinlogStreamReader
     """
@@ -847,6 +994,12 @@ def create_binlog_stream_reader(
     # only fetch events pertaining to the schemas in filter db.
     if config.get('filter_dbs'):
         kwargs['only_schemas'] = config['filter_dbs'].split(',')
+
+    # Only ask mysql-replication to read the column names from the table definition when the server
+    # is too old to put them in the binlog. Keep it switched off otherwise, because it maps the
+    # values of an event by position and gets them wrong across a schema change.
+    if legacy_column_mapping:
+        kwargs['use_column_name_cache'] = True
 
     if config['use_gtid']:
 
@@ -889,6 +1042,10 @@ def sync_binlog_stream(
         binlog_streams_map: tables to stream using binlog
         state: the current state
     """
+    # Check the server on every run, not just on the run that takes the initial snapshot, so that a
+    # server whose settings change later does not go unnoticed
+    legacy_column_mapping = verify_binlog_config(mysql_conn)
+
     for tap_stream_id in binlog_streams_map:
         common.whitelist_bookmark_keys(BOOKMARK_KEYS, tap_stream_id, state)
 
@@ -902,7 +1059,7 @@ def sync_binlog_stream(
     reader = None
 
     try:
-        reader = create_binlog_stream_reader(config, log_file, log_pos, gtid)
+        reader = create_binlog_stream_reader(config, log_file, log_pos, gtid, legacy_column_mapping)
 
         end_log_file, end_log_pos = fetch_current_log_file_and_pos(mysql_conn)
         LOGGER.info('Current Master binlog file and pos: %s %s', end_log_file, end_log_pos)

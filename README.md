@@ -359,6 +359,67 @@ pertaining to row changes (inserts, updates, deletes), binlog file rotate and gt
 Log_based method always requires an initial sync to get a snapshot of the table and current binlog coordinates/gtid 
 position.
 
+#### Required server settings
+
+The tap checks these settings on the source server before it starts a LOG_BASED sync:
+
+| Setting                | Value        | Default (MySQL) | Default (MariaDB) | If it is not set        |
+|------------------------|--------------|-----------------|-------------------|-------------------------|
+| `binlog_format`        | `ROW`        | `ROW`           | `MIXED`           | the sync stops          |
+| `binlog_row_image`     | `FULL`       | `FULL`          | `FULL`            | the sync stops          |
+| `binlog_row_metadata`  | `FULL`       | `MINIMAL`       | `NO_LOG`          | the tap warns, see below |
+
+Set `binlog_row_metadata` to `FULL`, because no server defaults to it:
+
+```sql
+SET GLOBAL binlog_row_metadata = FULL;
+```
+
+Add it to the server configuration as well, to keep the value across a restart. On Amazon RDS and
+Aurora, set it in the parameter group. MySQL supports it from 8.0.14 on, and MariaDB from 10.5 on.
+
+#### Why `binlog_row_metadata` matters
+
+A binlog row event holds the values of a row by position only. MySQL writes the column names of the
+table into the binlog just for `binlog_row_metadata = FULL`. Without `FULL`, the names have to come
+from the table definition as it is now, which puts the values of an event that MySQL wrote **before**
+a schema change into the wrong columns. For example, after
+`ALTER TABLE t ADD COLUMN c varchar(255) AFTER a`, every value from `c` on moves to the next column
+along, and the value of the last column gets dropped.
+
+With `FULL`, the tap takes the names from the event itself, so a schema change cannot misplace the
+values of an older event.
+
+#### What happens without `FULL`
+
+A sync still starts. The tap **warns** and reads the column names from the table definition instead,
+so a pipeline that already runs keeps running. A server older than MySQL 8.0.14 or MariaDB 10.5 has
+no such setting at all, and gets the same treatment.
+
+The tap does **not** emit an event whose values it cannot place. Reading the names from the table
+definition is safe only while the table still has as many columns as the event holds. Where the count
+does not match, the table gained or lost a column after MySQL wrote the event, so the tap stops with
+an error that names the stream and the binlog position. Re-sync that stream with `FULL_TABLE` to get
+past those events.
+
+So a table that nobody alters keeps replicating on any server, and a table that someone alters stops
+the sync instead of loading values into the wrong columns.
+
+This check compares column counts, so it catches a column that was **added or dropped**. It cannot
+catch a change that keeps the count the same, such as reordering columns with
+`MODIFY ... AFTER`. Set `binlog_row_metadata` to `FULL` to be safe against every schema change.
+
+Changing `binlog_row_metadata` applies to the events that MySQL writes from then on. The events
+already in the binlog carry no column names at all, so the tap stops at each one until you re-sync
+the stream with `FULL_TABLE`.
+
+`FULL_TABLE` and `INCREMENTAL` replication do not read the binlog, so none of this applies to them,
+and they have no minimum server version.
+
+A column **rename** needs a `FULL_TABLE` re-sync as well. An event that MySQL wrote before the rename
+carries the old name of the column, so the tap has nothing to map it to and leaves the value out of
+the record. It warns with the stream, the column and the binlog position when this happens.
+
 The tap support two ways of consuming log events: using binlog coordinates or GTID, the default behavior is using 
 binlog coordinates, when turning the `use_gtid` flag, you have to specify the engine flavor (mariadb/mysql) due to 
 how different are the GTID implementations in these two engines.
