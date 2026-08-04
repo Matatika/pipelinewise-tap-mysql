@@ -1031,9 +1031,18 @@ class TestBinlogReplication(unittest.TestCase):
         self.assertIn('date_updated', SINGER_MESSAGES[17].schema['properties'])
         self.assertIn('is_cancelled', SINGER_MESSAGES[17].schema['properties'])
 
+        # MySQL wrote this event while the column was still called `updated`, and the event
+        # carries that name. The tap keeps to the name in the event instead of mapping the value
+        # onto `date_updated` by position, because a position tells the tap nothing about which
+        # column a value belongs to. So the renamed column is absent here, and a rename needs a
+        # FULL_TABLE re-sync to bring the values of the older events across.
         self.assertIn('tap_mysql_test-binlog_1', SINGER_MESSAGES[18].stream)
-        self.assertIn('date_updated', SINGER_MESSAGES[18].record)
+        self.assertNotIn('date_updated', SINGER_MESSAGES[18].record)
         self.assertIn('is_cancelled', SINGER_MESSAGES[18].record)
+
+        # MySQL wrote this event after the rename, so it carries the new name
+        self.assertIn('tap_mysql_test-binlog_1', SINGER_MESSAGES[21].stream)
+        self.assertEqual('2018-06-18T00:00:00+00:00', SINGER_MESSAGES[21].record['date_updated'])
 
         self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'log_file'))
         self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_1', 'log_pos'))
@@ -1199,6 +1208,223 @@ class TestBinlogReplication(unittest.TestCase):
         self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_file'))
         self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'log_pos'))
         self.assertIsNotNone(singer.get_bookmark(self.state, 'tap_mysql_test-binlog_2', 'gtid'))
+
+
+class TestBinlogColumnAddedMidTable(unittest.TestCase):
+    """
+    A column added in the middle of a table must not shift the values of the events that MySQL
+    wrote before the DDL ran.
+
+    A binlog row event holds a positional row image only. If the column names come from the
+    current table definition instead of from the event, then every value from the position of
+    the new column on goes to the wrong column, and the last value gets dropped. This is why
+    the tap needs binlog_row_metadata='FULL', which makes MySQL write the column names of the
+    table into each event.
+    """
+
+    def setUp(self):
+        self.maxDiff = None
+        self.state = {}
+        self.conn = test_utils.get_test_connection()
+
+        global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
+
+        with connect_with_backoff(self.conn) as open_conn:
+            with open_conn.cursor() as cursor:
+                cursor.execute('CREATE TABLE organizations ('
+                               'id int PRIMARY KEY, '
+                               'name varchar(255), '
+                               'webhook_email varchar(255), '
+                               'seat_count int, '
+                               'created_at datetime)')
+            open_conn.commit()
+
+        # Start the stream before the rows, so that the sync reads the events that MySQL wrote
+        # before the DDL while the table already has the new column
+        log_file, log_pos = binlog.fetch_current_log_file_and_pos(self.conn)
+
+        with connect_with_backoff(self.conn) as open_conn:
+            with open_conn.cursor() as cursor:
+                cursor.execute("INSERT INTO organizations "
+                               "(id, name, webhook_email, seat_count, created_at) "
+                               "VALUES (1, 'acme', 'org_rkclygng9gvzzlh', 42, '2026-01-01 10:00:00')")
+                cursor.execute("INSERT INTO organizations "
+                               "(id, name, webhook_email, seat_count, created_at) "
+                               "VALUES (2, 'globex', 'org_aaaaaaaaaaaaaaa', 7, '2026-01-02 11:00:00')")
+
+                # The DDL under test: a new column that is not the last column
+                cursor.execute('ALTER TABLE organizations '
+                               'ADD COLUMN invoice_frequency varchar(255) NULL AFTER name')
+
+                cursor.execute("INSERT INTO organizations "
+                               "(id, name, invoice_frequency, webhook_email, seat_count, created_at) "
+                               "VALUES (3, 'initech', 'monthly', 'org_postddl0000000', 99, "
+                               "'2026-02-01 12:00:00')")
+            open_conn.commit()
+
+        # Discover after the DDL, the way a sync that starts after the DDL does
+        self.catalog = test_utils.discover_catalog(self.conn, {})
+
+        for stream in self.catalog.streams:
+            stream.stream = stream.table
+
+            stream.metadata = [
+                {'breadcrumb': (),
+                 'metadata': {
+                     'selected': True,
+                     'database-name': 'tap_mysql_test',
+                     'table-key-properties': ['id']
+                 }}
+            ] + [
+                {'breadcrumb': ('properties', prop), 'metadata': {'selected': True}}
+                for prop in stream.schema.properties
+            ]
+
+            test_utils.set_replication_method_and_key(stream, 'LOG_BASED', None)
+
+            self.state = singer.write_bookmark(self.state, stream.tap_stream_id, 'log_file', log_file)
+            self.state = singer.write_bookmark(self.state, stream.tap_stream_id, 'log_pos', log_pos)
+            self.state = singer.write_bookmark(self.state, stream.tap_stream_id, 'version', singer.utils.now())
+
+    def tearDown(self) -> None:
+        global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
+
+    def test_values_stay_with_their_own_columns(self):
+        global SINGER_MESSAGES
+
+        config = test_utils.get_db_config()
+        config['server_id'] = "100"
+
+        tap_mysql.do_sync(self.conn, config, self.catalog, self.state)
+
+        records = [m.record for m in SINGER_MESSAGES if isinstance(m, singer.RecordMessage)]
+
+        self.assertEqual(
+            [
+                # The 2 rows that MySQL wrote before the DDL. `invoice_frequency` did not exist
+                # yet, so the event does not hold it and the tap leaves the key out. Every other
+                # value stays with its own column, and `created_at` keeps its value.
+                {'id': 1, 'name': 'acme',
+                 'webhook_email': 'org_rkclygng9gvzzlh', 'seat_count': 42,
+                 'created_at': '2026-01-01T10:00:00+00:00'},
+                {'id': 2, 'name': 'globex',
+                 'webhook_email': 'org_aaaaaaaaaaaaaaa', 'seat_count': 7,
+                 'created_at': '2026-01-02T11:00:00+00:00'},
+                # The row that MySQL wrote after the DDL
+                {'id': 3, 'name': 'initech', 'invoice_frequency': 'monthly',
+                 'webhook_email': 'org_postddl0000000', 'seat_count': 99,
+                 'created_at': '2026-02-01T12:00:00+00:00'},
+            ],
+            [{k: v for k, v in record.items() if k != binlog.SDC_DELETED_AT}
+             for record in records])
+
+    def test_string_column_is_not_hexified(self):
+        """A varchar value must stay a string, even when the MySQL client returns it as bytes."""
+        global SINGER_MESSAGES
+
+        config = test_utils.get_db_config()
+        config['server_id'] = "100"
+
+        tap_mysql.do_sync(self.conn, config, self.catalog, self.state)
+
+        records = [m.record for m in SINGER_MESSAGES if isinstance(m, singer.RecordMessage)]
+
+        for record in records:
+            self.assertIsInstance(record['webhook_email'], str)
+            self.assertTrue(record['webhook_email'].startswith('org_'),
+                            f"webhook_email is not a readable string: {record['webhook_email']!r}")
+
+
+class TestBinlogEventWithoutColumnNames(unittest.TestCase):
+    """
+    Events that MySQL wrote while binlog_row_metadata was not 'FULL' carry no column names.
+
+    verify_binlog_config turns away a server that is not set to 'FULL', but the binlog still holds
+    the older events from before an operator changed the setting. The tap must refuse those events
+    instead of emitting a record with nothing in it.
+    """
+
+    def setUp(self):
+        self.maxDiff = None
+        self.state = {}
+        self.conn = test_utils.get_test_connection()
+
+        global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
+
+        # Needs the privilege for global variables, which conftest grants, and a server new enough
+        # to have the variable
+        try:
+            with connect_with_backoff(self.conn) as open_conn:
+                with open_conn.cursor() as cursor:
+                    cursor.execute('SET GLOBAL binlog_row_metadata = MINIMAL')
+                open_conn.commit()
+        except mysql.connector.errors.Error as ex:
+            self.skipTest(f'cannot set binlog_row_metadata on this server: {ex}')
+
+        try:
+            with connect_with_backoff(self.conn) as open_conn:
+                with open_conn.cursor() as cursor:
+                    cursor.execute('CREATE TABLE orgs (id int PRIMARY KEY, name varchar(255), seat_count int)')
+                open_conn.commit()
+
+            log_file, log_pos = binlog.fetch_current_log_file_and_pos(self.conn)
+
+            with connect_with_backoff(self.conn) as open_conn:
+                with open_conn.cursor() as cursor:
+                    cursor.execute("INSERT INTO orgs VALUES (1, 'acme', 42)")
+                open_conn.commit()
+        finally:
+            # The operator sets the variable correctly, but the older events stay in the binlog
+            with connect_with_backoff(self.conn) as open_conn:
+                with open_conn.cursor() as cursor:
+                    cursor.execute('SET GLOBAL binlog_row_metadata = FULL')
+                open_conn.commit()
+
+        self.catalog = test_utils.discover_catalog(self.conn, {})
+
+        for stream in self.catalog.streams:
+            stream.stream = stream.table
+
+            stream.metadata = [
+                {'breadcrumb': (),
+                 'metadata': {
+                     'selected': True,
+                     'database-name': 'tap_mysql_test',
+                     'table-key-properties': ['id']
+                 }}
+            ] + [
+                {'breadcrumb': ('properties', prop), 'metadata': {'selected': True}}
+                for prop in stream.schema.properties
+            ]
+
+            test_utils.set_replication_method_and_key(stream, 'LOG_BASED', None)
+
+            self.state = singer.write_bookmark(self.state, stream.tap_stream_id, 'log_file', log_file)
+            self.state = singer.write_bookmark(self.state, stream.tap_stream_id, 'log_pos', log_pos)
+            self.state = singer.write_bookmark(self.state, stream.tap_stream_id, 'version', singer.utils.now())
+
+    def tearDown(self) -> None:
+        global SINGER_MESSAGES
+        SINGER_MESSAGES.clear()
+
+    def test_the_tap_refuses_an_event_that_has_no_column_names(self):
+        global SINGER_MESSAGES
+
+        config = test_utils.get_db_config()
+        config['server_id'] = "100"
+
+        with self.assertRaises(Exception) as context:
+            tap_mysql.do_sync(self.conn, config, self.catalog, self.state)
+
+        self.assertIn('cannot be mapped to columns safely', str(context.exception))
+        self.assertIn("binlog_row_metadata was not 'FULL'", str(context.exception))
+
+        # The point of the check: no record goes out with its values dropped
+        records = [m for m in SINGER_MESSAGES if isinstance(m, singer.RecordMessage)]
+        self.assertEqual([], records)
 
 
 class TestViews(unittest.TestCase):

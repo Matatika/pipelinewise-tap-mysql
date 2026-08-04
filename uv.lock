@@ -541,7 +541,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -616,12 +616,16 @@ wheels = [
 
 [[package]]
 name = "mysql-replication"
-version = "0.43.0"
+version = "1.0.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "packaging" },
     { name = "pymysql" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/61/02672cf7865c4658c2562f07b2df5cda60b8c4c8b0f2d1cd83037d174fbb/mysql-replication-0.43.0.tar.gz", hash = "sha256:8b5bd58289dc068a1dc6db100b7607c17d05dad0b657c9a3b4e4d37947531d30", size = 47090, upload-time = "2023-07-23T10:06:20.629Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9a/1f/bcbde6d71cb49f173899a64a66ed032e6cd64502de6a604fc8e423c30780/mysql_replication-1.0.16.tar.gz", hash = "sha256:69625094ea47b9d6059607b394c77ee1a0a0dad5ba6787016950ddc6a4bd9a51", size = 75980, upload-time = "2026-07-12T05:15:42.46Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/15/830a44eaafcfba3bfebfdcb0c4f48da119a318a2f86057aba55f7c3c44ea/mysql_replication-1.0.16-py3-none-any.whl", hash = "sha256:d121d41517500a1a7ea93b0f2950193ae37f9d638635b10f5fa190ca7b83f9b6", size = 84526, upload-time = "2026-07-12T05:15:41.431Z" },
+]
 
 [[package]]
 name = "orjson"
@@ -762,7 +766,7 @@ requires-dist = [
     { name = "backports-datetime-fromisoformat", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
     { name = "cryptography" },
     { name = "mysql-connector-python", specifier = "==9.7.0" },
-    { name = "mysql-replication", specifier = "==0.43" },
+    { name = "mysql-replication", specifier = "==1.0.16" },
     { name = "orjson" },
     { name = "pipelinewise-singer-python", specifier = "==1.*" },
     { name = "plpygis", specifier = "==0.6.1" },
