@@ -1,3 +1,4 @@
 # dbc driver list
 [drivers]
 [drivers.mysql]
+version = '=0.7.0'
